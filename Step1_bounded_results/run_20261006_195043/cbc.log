@@ -1,0 +1,83 @@
+Solver command line: ['d:\\anaconda\\envs\\dhnx_env\\Library\\bin\\cbc.exe', '-ratio', '0.01', '-seconds', '900', '-timeMode', 'elapsed', '-logLevel', '1', '-printingOptions', 'all', '-import', 'C:\\Users\\Minerva\\AppData\\Local\\Temp\\tmpdm4c6dgf.pyomo.lp', '-stat=1', '-solve', '-solu', 'C:\\Users\\Minerva\\AppData\\Local\\Temp\\tmpdm4c6dgf.pyomo.soln']
+
+Welcome to the CBC MILP Solver 
+Version: 2.10.13 
+Build Date: May 12 2026 
+
+command line - d:\anaconda\envs\dhnx_env\Library\bin\cbc.exe -ratio 0.01 -seconds 900 -timeMode elapsed -logLevel 1 -printingOptions all -import C:\Users\Minerva\AppData\Local\Temp\tmpdm4c6dgf.pyomo.lp -stat=1 -solve -solu C:\Users\Minerva\AppData\Local\Temp\tmpdm4c6dgf.pyomo.soln (default strategy 1)
+ratioGap was changed from 0 to 0.01
+seconds was changed from 1e+100 to 900
+Option for timeMode changed from cpu to elapsed
+Option for printingOptions changed from normal to all
+Presolve 804875 (-466035) rows, 199755 (-466035) columns and 2420616 (-617418) elements
+Statistics for presolved model
+Original problem has 36 integers (36 of which binary)
+Presolved problem has 36 integers (36 of which binary)
+==== 187617 zero objective 101 different
+==== absolute objective values 101 different
+==== for integers 0 zero objective 10 different
+5 variables have objective of 159.701
+5 variables have objective of 183.12
+4 variables have objective of 798.506
+4 variables have objective of 915.599
+4 variables have objective of 1597.01
+4 variables have objective of 1785.51
+4 variables have objective of 1831.2
+4 variables have objective of 2047.34
+1 variables have objective of 3194.03
+1 variables have objective of 3662.4
+==== for integers absolute objective values 10 different
+5 variables have objective of 159.701
+5 variables have objective of 183.12
+4 variables have objective of 798.506
+4 variables have objective of 915.599
+4 variables have objective of 1597.01
+4 variables have objective of 1785.51
+4 variables have objective of 1831.2
+4 variables have objective of 2047.34
+1 variables have objective of 3194.03
+1 variables have objective of 3662.4
+===== end objective counts
+
+
+Problem has 804875 rows, 199755 columns (12138 with objective) and 2420616 elements
+There are 12102 singletons with objective 
+Column breakdown:
+0 of type 0.0->inf, 42393 of type 0.0->up, 0 of type lo->inf, 
+0 of type lo->up, 157326 of type free, 0 of type fixed, 
+0 of type -inf->0.0, 0 of type -inf->up, 36 of type 0.0->1.0 
+Row breakdown:
+24204 of type E 0.0, 0 of type E 1.0, 0 of type E -1.0, 
+30255 of type E other, 0 of type G 0.0, 2 of type G 1.0, 
+0 of type G other, 689886 of type L 0.0, 18 of type L 1.0, 
+60510 of type L other, 0 of type Range 0.0->1.0, 0 of type Range other, 
+0 of type Free 
+Continuous objective value is 86162.1 - 691.35 seconds
+Cgl0003I 2 fixed, 0 tightened bounds, 14371 strengthened rows, 0 substitutions
+Cgl0003I 0 fixed, 0 tightened bounds, 3767 strengthened rows, 0 substitutions
+Cgl0004I processed model has 704165 rows, 175535 columns (28 integer (28 of which binary)) and 2132183 elements
+Cbc0020I Exiting on maximum time
+Cbc0005I Partial search - best objective 1e+50 (best possible 86344.277), took 0 iterations and 0 nodes (810.77 seconds)
+Cbc0035I Maximum depth 0, 0 variables fixed on reduced cost
+Cuts at root node changed objective from 86344.3 to 86344.3
+Probing was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+Gomory was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+Knapsack was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+Clique was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+MixedIntegerRounding2 was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+FlowCover was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+TwoMirCuts was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+ZeroHalf was tried 0 times and created 0 cuts of which 0 were active after adding rounds of cuts (0.000 seconds)
+
+Result - Stopped on time limit
+
+No feasible solution found
+Lower bound:                    86344.277
+Enumerated nodes:               0
+Total iterations:               0
+Time (CPU seconds):             810.84
+Time (Wallclock seconds):       810.84
+
+Total time (CPU seconds):       842.51   (Wallclock seconds):       842.51
+
+

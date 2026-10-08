@@ -1,0 +1,10 @@
+{
+  "termination_condition": "intermediateNonInteger",
+  "gap_target": 0.01,
+  "cbc_elapsed_time_target_seconds": 900,
+  "solve_call_seconds": 877.9475128999984,
+  "has_candidate_solution": false,
+  "lower_bound_EUR": 86344.277,
+  "upper_bound_EUR": 1e+50,
+  "validated_feasible": false
+}

@@ -1,0 +1,6 @@
+consumer_id,plot_label,source_column,peak_kW,time_steps,source,unit_status
+0,C1,Load 2,50.5,8760,Demand profiles_heating.xlsx / Sheet1,CONFIRMED: source kWh per 1h; model kW
+1,C2,Load 4,108.929747,8760,Demand profiles_heating.xlsx / Sheet1,CONFIRMED: source kWh per 1h; model kW
+2,C3,Load 10,128.929747,8760,Demand profiles_heating.xlsx / Sheet1,CONFIRMED: source kWh per 1h; model kW
+3,C4,Load 16,148.929747,8760,Demand profiles_heating.xlsx / Sheet1,CONFIRMED: source kWh per 1h; model kW
+4,C5,Load 22,168.929747,8760,Demand profiles_heating.xlsx / Sheet1,CONFIRMED: source kWh per 1h; model kW

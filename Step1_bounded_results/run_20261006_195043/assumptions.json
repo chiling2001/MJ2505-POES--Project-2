@@ -1,0 +1,23 @@
+{
+  "country": "Sweden",
+  "test_only": false,
+  "hours": 8760,
+  "time_step_h": 1.0,
+  "model_power_unit": "kW",
+  "model_energy_unit": "kWh",
+  "solver_gap_target": 0.01,
+  "cbc_elapsed_time_target_seconds": 900,
+  "distinct_load_states": 6051,
+  "aggregation": "exact duplicate vectors with occurrence-count weights",
+  "pipe_units_assumed": "capacity kW; fixed loss kW/m; initial cost EUR/m",
+  "pipe_cost_basis_assumed": "initial investment annualised at 5% over 30 years",
+  "capital_recovery_factor": 0.06505143508027657,
+  "producer_prices_and_capacities": "scenario assumptions",
+  "boiler_capital_cost": "excluded; producer capacities fixed",
+  "coordinates": "assumed local Cartesian metres",
+  "storage": "none",
+  "pipe_direction": "fork-to-fork pipes may reverse hourly; terminal pipes are directed",
+  "pipe_type_requirement": "at least one installed DN-30 and one installed DN-50",
+  "losses": "installed pipes have constant losses in every model hour",
+  "calendar_index": "2025-01-01 is an arbitrary non-leap model index, not a source-year claim"
+}
