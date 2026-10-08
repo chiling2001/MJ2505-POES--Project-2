@@ -1,0 +1,36 @@
+{
+  "country": "Denmark",
+  "study_region": "Near Copenhagen",
+  "hours": 8760,
+  "time_step_h": 1.0,
+  "power_unit": "kW",
+  "energy_unit": "kWh",
+  "method": "DHNx investment master; exact all-hour operational LPs and Benders cuts",
+  "time_aggregation": "exact duplicate vectors only; occurrence counts sum to 8760",
+  "representative_hour_cost_approximation": false,
+  "full_year_relative_gap_target": 0.0,
+  "absolute_gap_tolerance_EUR": 0.02,
+  "search_seconds_target": 1800,
+  "pipe_units_assumed": "kW capacity; kW/m constant losses; EUR/m initial pipe investment",
+  "annualisation": {
+    "interest_rate": 0.05,
+    "life_years": 30,
+    "CRF": 0.06505143508027657
+  },
+  "boiler_capital_cost": "excluded; both capacities prescribed, not investment decisions",
+  "producer_parameters": "scenario assumptions; not Copenhagen measured prices or capacities",
+  "coordinates": "schematic local metres; not surveyed coordinates near Copenhagen",
+  "demand": "five supplied course profiles; not measured Copenhagen heat demand",
+  "currency": "EUR throughout; no DKK conversion or local tariff calibration",
+  "pipe_capacity": "cap_max of selected type; cap_min is not a minimum hourly flow",
+  "pipe_types": "one type per route; at least one DN-30 and one DN-50 installed",
+  "losses": "constant for each installed pipe in every hour",
+  "direction": "actual DHNx bounds retained, including bidirectional producer connections",
+  "time_coupling": "none; no storage, ramping or hourly cost changes",
+  "hydraulics": "thermal capacity and balance checks only; no pressure calculation",
+  "references": [
+    "DHNx tutorial and installed heat-pipeline equations",
+    "SciPy linprog HiGHS documentation for dual marginals",
+    "SCIP Benders documentation for optimality and feasibility cuts"
+  ]
+}

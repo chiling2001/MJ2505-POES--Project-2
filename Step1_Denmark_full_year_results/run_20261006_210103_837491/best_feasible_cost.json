@@ -1,0 +1,8 @@
+{
+  "feasible": true,
+  "annual_operating_cost_EUR": 73342.73234728488,
+  "annual_total_cost_EUR": 90232.38206026547,
+  "hours_checked": 8760,
+  "max_node_balance_error_kW": 5.1736392947532295e-14,
+  "max_flow_bound_error_kW": 0.0
+}

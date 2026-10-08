@@ -1,0 +1,45 @@
+{
+  "country": "Denmark",
+  "study_region": "Near Copenhagen",
+  "solution_quality": "annual_optimality_gap_target_met",
+  "hours": 8760,
+  "exact_load_states": 6051,
+  "annual_cost_states": 6051,
+  "DHNx_master_constraint_hours": 4,
+  "investment_iterations": 8,
+  "heat_demand_kWh": 1905335.520881516,
+  "peak_demand_kW": 592.2189889885266,
+  "network_loss_kW": 4.1999109218,
+  "heat_losses_kWh": 36791.219674968,
+  "heat_production_kWh": 1942126.740556484,
+  "initial_pipe_investment_EUR": 259635.313074,
+  "annualised_pipe_cost_EUR": 16889.64971298059,
+  "operating_cost_EUR": 73342.73234728521,
+  "validated_annual_total_cost_EUR": 90232.38206026581,
+  "pipe_type_counts": {
+    "DN-50": 13,
+    "DN-30": 1
+  },
+  "max_balance_error_kW": 1.305622276959184e-13,
+  "validation": {
+    "all_hours_checked": 8760,
+    "exact_states_checked": 6051,
+    "infeasible_state_count": 0,
+    "infeasible_hour_count": 0,
+    "max_node_balance_error_kW": 5.1736392947532295e-14,
+    "max_flow_bound_error_kW": 0.0
+  },
+  "design_solver": {
+    "method": "exact annual Benders using DHNx investment variables and CBC",
+    "stop_reason": "annual_gap_target_met",
+    "requested_annual_relative_gap": 0.0,
+    "absolute_gap_tolerance_EUR": 0.02,
+    "annual_lower_bound_EUR": 90232.37071298058,
+    "annual_upper_bound_EUR": 90232.38206026547,
+    "annual_relative_gap": 1.2575623773515394e-07,
+    "elapsed_search_seconds": 104.0565502999998,
+    "all_hour_feasibility_verified": true,
+    "DHNx_fixed_design_equivalence_verified": true
+  },
+  "full_year_investment_optimality_gap": 1.2575623773515394e-07
+}

@@ -1,0 +1,137 @@
+[
+  {
+    "iteration": 1,
+    "master_termination": "optimal",
+    "master_objective_EUR": 85215.39439148152,
+    "annual_lower_bound_EUR": 85215.39339148151,
+    "best_annual_upper_bound_EUR": 90232.38206026547,
+    "annual_relative_gap": 0.055600756116946516,
+    "master_max_constraint_error": 0.0004013473371742293,
+    "candidate_evaluation": {
+      "feasible": true,
+      "annual_operating_cost_EUR": 83088.24145313332,
+      "annual_total_cost_EUR": 98362.83684461484,
+      "hours_checked": 8760,
+      "max_node_balance_error_kW": 3.0753177782116836e-14,
+      "max_flow_bound_error_kW": 0.0
+    },
+    "cut_count": 2
+  },
+  {
+    "iteration": 2,
+    "master_termination": "optimal",
+    "master_objective_EUR": 86130.99334023641,
+    "annual_lower_bound_EUR": 86130.99234023641,
+    "best_annual_upper_bound_EUR": 90232.38206026547,
+    "annual_relative_gap": 0.045453634564249695,
+    "master_max_constraint_error": 0.0004013473371742293,
+    "candidate_evaluation": {
+      "feasible": true,
+      "annual_operating_cost_EUR": 83071.08373934483,
+      "annual_total_cost_EUR": 99261.27807958124,
+      "hours_checked": 8760,
+      "max_node_balance_error_kW": 3.0753177782116836e-14,
+      "max_flow_bound_error_kW": 0.0
+    },
+    "cut_count": 3
+  },
+  {
+    "iteration": 3,
+    "master_termination": "optimal",
+    "master_objective_EUR": 86347.13691624712,
+    "annual_lower_bound_EUR": 86347.13591624712,
+    "best_annual_upper_bound_EUR": 90232.38206026547,
+    "annual_relative_gap": 0.04305822427943252,
+    "master_max_constraint_error": 0.0004013473371742293,
+    "candidate_evaluation": {
+      "feasible": true,
+      "annual_operating_cost_EUR": 78825.89916128988,
+      "annual_total_cost_EUR": 95232.23707753701,
+      "hours_checked": 8760,
+      "max_node_balance_error_kW": 3.019806626980426e-14,
+      "max_flow_bound_error_kW": 0.0
+    },
+    "cut_count": 4
+  },
+  {
+    "iteration": 4,
+    "master_termination": "optimal",
+    "master_objective_EUR": 88178.33481375691,
+    "annual_lower_bound_EUR": 88178.33381375691,
+    "best_annual_upper_bound_EUR": 90232.38206026547,
+    "annual_relative_gap": 0.022763981174038873,
+    "master_max_constraint_error": 0.0004013473371742293,
+    "candidate_evaluation": {
+      "feasible": true,
+      "annual_operating_cost_EUR": 73062.16949065973,
+      "annual_total_cost_EUR": 91299.70530441664,
+      "hours_checked": 8760,
+      "max_node_balance_error_kW": 4.496403249731884e-14,
+      "max_flow_bound_error_kW": 0.0
+    },
+    "cut_count": 5
+  },
+  {
+    "iteration": 5,
+    "master_termination": "optimal",
+    "master_objective_EUR": 89966.22595641331,
+    "annual_lower_bound_EUR": 89966.22495641331,
+    "best_annual_upper_bound_EUR": 90232.38206026547,
+    "annual_relative_gap": 0.0029496849997199563,
+    "master_max_constraint_error": 6.999999982326699e-06,
+    "candidate_evaluation": {
+      "feasible": true,
+      "annual_operating_cost_EUR": 75575.71097360023,
+      "annual_total_cost_EUR": 92213.13393001354,
+      "hours_checked": 8760,
+      "max_node_balance_error_kW": 4.496403249731884e-14,
+      "max_flow_bound_error_kW": 0.0
+    },
+    "cut_count": 6
+  },
+  {
+    "iteration": 6,
+    "master_termination": "optimal",
+    "master_objective_EUR": 90087.47353955782,
+    "annual_lower_bound_EUR": 90087.47253955781,
+    "best_annual_upper_bound_EUR": 90232.38206026547,
+    "annual_relative_gap": 0.0016059591623202058,
+    "master_max_constraint_error": 0.0004595234641353585,
+    "candidate_evaluation": {
+      "feasible": true,
+      "annual_operating_cost_EUR": 75526.10107194235,
+      "annual_total_cost_EUR": 92280.61661150015,
+      "hours_checked": 8760,
+      "max_node_balance_error_kW": 4.496403249731884e-14,
+      "max_flow_bound_error_kW": 0.0
+    },
+    "cut_count": 7
+  },
+  {
+    "iteration": 7,
+    "master_termination": "optimal",
+    "master_objective_EUR": 90208.72212270231,
+    "annual_lower_bound_EUR": 90208.7211227023,
+    "best_annual_upper_bound_EUR": 90232.38206026547,
+    "annual_relative_gap": 0.0002622222424247207,
+    "master_max_constraint_error": 0.0003569606363580391,
+    "candidate_evaluation": {
+      "feasible": true,
+      "annual_operating_cost_EUR": 74133.80525246114,
+      "annual_total_cost_EUR": 91005.41337516345,
+      "hours_checked": 8760,
+      "max_node_balance_error_kW": 3.019806626980426e-14,
+      "max_flow_bound_error_kW": 0.0
+    },
+    "cut_count": 8
+  },
+  {
+    "iteration": 8,
+    "master_termination": "optimal",
+    "master_objective_EUR": 90232.37171298059,
+    "annual_lower_bound_EUR": 90232.37071298058,
+    "best_annual_upper_bound_EUR": 90232.38206026547,
+    "annual_relative_gap": 1.2575623773515394e-07,
+    "master_max_constraint_error": 0.00034728488303947813
+  }
+]
