@@ -1,0 +1,9 @@
+{
+  "termination_condition": "optimal",
+  "has_integer_candidate": true,
+  "gap_applies_to": "representative-hour design only",
+  "requested_gap": 0.01,
+  "max_integer_error": 0.0,
+  "max_constraint_violation_kW": 9.999999974752427e-06,
+  "representative_objective_EUR": 90095.41519387023
+}

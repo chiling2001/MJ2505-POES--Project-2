@@ -1,0 +1,13 @@
+[
+  {
+    "round": 1,
+    "design_states": 141,
+    "representative_objective_EUR": 90095.41519387023,
+    "all_hours_checked": 8760,
+    "exact_states_checked": 6051,
+    "infeasible_state_count": 0,
+    "infeasible_hour_count": 0,
+    "max_node_balance_error_kW": 5.1736392947532295e-14,
+    "max_flow_bound_error_kW": 0.0
+  }
+]

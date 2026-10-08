@@ -1,0 +1,41 @@
+{
+  "solution_quality": "full_year_feasible_design_not_proven_globally_optimal",
+  "hours": 8760,
+  "exact_load_states": 6051,
+  "final_design_states": 141,
+  "rounds": 1,
+  "heat_demand_kWh": 1905335.520881516,
+  "peak_demand_kW": 592.2189889885266,
+  "network_loss_kW": 4.1999109218,
+  "heat_losses_kWh": 36791.219674968,
+  "heat_production_kWh": 1942126.740556484,
+  "initial_pipe_investment_EUR": 259635.313074,
+  "annualised_pipe_cost_EUR": 16889.64971298059,
+  "operating_cost_EUR": 73342.73234728521,
+  "validated_annual_total_cost_EUR": 90232.38206026581,
+  "representative_design_objective_EUR": 90095.41519387023,
+  "design_cost_estimate_difference_EUR": -136.96686639558175,
+  "pipe_type_counts": {
+    "DN-50": 13,
+    "DN-30": 1
+  },
+  "max_balance_error_kW": 1.305622276959184e-13,
+  "validation": {
+    "all_hours_checked": 8760,
+    "exact_states_checked": 6051,
+    "infeasible_state_count": 0,
+    "infeasible_hour_count": 0,
+    "max_node_balance_error_kW": 5.1736392947532295e-14,
+    "max_flow_bound_error_kW": 0.0
+  },
+  "design_solver": {
+    "termination_condition": "optimal",
+    "has_integer_candidate": true,
+    "gap_applies_to": "representative-hour design only",
+    "requested_gap": 0.01,
+    "max_integer_error": 0.0,
+    "max_constraint_violation_kW": 9.999999974752427e-06,
+    "representative_objective_EUR": 90095.41519387023
+  },
+  "full_year_investment_optimality_gap": null
+}

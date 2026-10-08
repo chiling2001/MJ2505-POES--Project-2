@@ -1,0 +1,29 @@
+{
+  "hours": 8760,
+  "time_step_h": 1.0,
+  "power_unit": "kW",
+  "energy_unit": "kWh",
+  "method": "weighted actual-hour DHNx design; adaptive full-year fixed-network LP validation",
+  "design_global_optimality": "not proven for the full-year investment problem",
+  "design_loads": "actual unscaled load vectors; clustering approximates annual design costs",
+  "annual_operation": "all original hours; exact duplicate states solved once and restored",
+  "representatives_requested": 128,
+  "max_rounds": 4,
+  "reduced_model_gap_target": 0.01,
+  "cbc_seconds_per_round": 600,
+  "pipe_units_assumed": "kW capacity; kW/m constant heat loss; EUR/m initial cost",
+  "annualisation": {
+    "interest_rate": 0.05,
+    "life_years": 30,
+    "CRF": 0.06505143508027657
+  },
+  "boiler_capital_cost": "excluded; capacities prescribed",
+  "producer_parameters": "scenario assumptions",
+  "coordinates": "assumed local metres",
+  "pipe_capacity": "cap_max of selected type; cap_min is not a minimum hourly flow",
+  "pipe_direction": "DHNx actual input/output bounds retained; consumer branches directed",
+  "pipe_types": "one type per route; at least one DN-30 and one DN-50 installed",
+  "losses": "constant for every installed pipe in all hours, including zero-flow hours",
+  "time_coupling": "none; no storage, ramping or changing hourly prices",
+  "hydraulics": "not calculated; validation checks thermal flows, not pressures or temperatures"
+}

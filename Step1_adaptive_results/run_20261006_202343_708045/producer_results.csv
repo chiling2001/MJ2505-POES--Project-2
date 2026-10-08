@@ -1,0 +1,3 @@
+producer_id,technology,capacity_kW_heat,efficiency_LHV,fuel_EUR_MWh_input,variable_OM_EUR_MWh_heat,heat_cost_EUR_kWh,heat_production_kWh,max_output_kW,operating_cost_EUR
+0,Wood-chip boiler,400.0,0.89,30.0,3.0,0.03670786516853933,1891550.861249846,358.0,69434.79397419379
+1,Natural-gas boiler,400.0,0.93,70.0,2.0,0.07726881720430107,50575.879306638206,238.4188999103266,3907.9383730914205
