@@ -1,0 +1,17 @@
+parameter,value,unit,status,note
+coordinate_convention,lon=x; lat=y,m,ASSUMPTION,"Local Cartesian coordinates, not geographical degrees"
+pipe_length_method,straight-line distance,m,ASSUMPTION,Ignores road detours
+heat_demand,series,,CONFIRMED,Use all 8760 hourly values
+num_ts,8760,time_steps,CONFIRMED,
+time_res,1,h,CONFIRMED,
+input_energy_unit,kWh per 1-hour time step,kWh,CONFIRMED,"Poornima clarification supplied by user, 2026-10-05"
+raw_to_kW_factor,1,1/h,CONFIRMED,Power(kW)=interval energy(kWh)/1h. Values unchanged.
+country,,,UNCONFIRMED,Choose and justify a country before country-specific energy prices
+storage,none,,ASSUMPTION,
+heat_flow_values,unchanged original values,,CONFIRMED,Original interval energy values equal average power values numerically because dt=1h
+model_power_unit,kW,,CONFIRMED,"Consumer heat_flow, P_heat_max, pipe and producer capacities"
+model_energy_unit,kWh,,CONFIRMED,Sum hourly average powers multiplied by dt=1h
+variable_cost_unit,EUR/kWh,,CONFIRMED,Convert EUR/MWh data by dividing by 1000
+pipe_fixed_loss_unit,kW/m,,CONFIRMED,Convert W/m data by dividing by 1000
+pipe_parameter_units,capacity kW; fixed loss kW/m; fixed cost EUR/m,,ASSUMED,Verify original pipe-table unit headings
+pipe_cost_time_basis,,,UNCONFIRMED,491/563 retained as supplied. Confirm capital vs annualised values before full-year objective.

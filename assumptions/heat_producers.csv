@@ -1,0 +1,3 @@
+producer_id,plot_label,technology,efficiency_LHV,efficiency_status,capacity_kW,fuel_price_EUR_per_MWh_input,variable_OM_EUR_per_MWh_heat,source,note
+0,P1,Non-condensing wood-chip boiler,0.89,2020 lower-range reference,,,,"Technology Excel / 09a Wood Chips HOP, small / G8 and Note C",No flue gas condensation; costs for the selected configuration need confirmation
+1,P2,Non-condensing natural-gas boiler,0.93,Assumed within 92-95% range,,,,Technology Excel / 44 Natural Gas DH Only / Note B,93% is a modelling choice; specify capacity and heat cost separately for each producer

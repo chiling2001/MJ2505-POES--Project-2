@@ -1,0 +1,6 @@
+pipe_type,absolute_thermal_loss,fixed_cost,maximum_capacity,minimum_capacity,loss_unit,cost_unit,capacity_unit,unit_status,source,cost_time_basis
+DN-25,0.0076,466,28,27,kW/m,EUR/m,kW,ASSUMED: verify source headings,"User-provided pipe table, 2026-10-05",UNCONFIRMED
+DN-30,0.0086,491,54,53,kW/m,EUR/m,kW,ASSUMED: verify source headings,"User-provided pipe table, 2026-10-05",UNCONFIRMED
+DN-40,0.0095,522,98,97,kW/m,EUR/m,kW,ASSUMED: verify source headings,"User-provided pipe table, 2026-10-05",UNCONFIRMED
+DN-50,0.0091,563,179,178,kW/m,EUR/m,kW,ASSUMED: verify source headings,"User-provided pipe table, 2026-10-05",UNCONFIRMED
+DN-60,0.011,620,335,334,kW/m,EUR/m,kW,ASSUMED: verify source headings,"User-provided pipe table, 2026-10-05",UNCONFIRMED
