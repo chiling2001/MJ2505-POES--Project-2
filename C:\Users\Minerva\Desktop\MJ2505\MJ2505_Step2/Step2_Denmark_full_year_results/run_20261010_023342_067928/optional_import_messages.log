@@ -1,0 +1,10 @@
+Need to install geopandas to process osm data.
+Need to install shapely to download from osm.
+Need to install shapely to download from osm.
+Need to install geopandas to download from osm.
+Need to install osmnx to download from osm.
+Need to install CoolProp to use the hydraulic pre-calculation module.
+Need to install geopandas to process geometry data.
+Need to install shapely to process geometry.
+Need to install geopandas to process geometry data.
+Need to install shapely to process geometry.
