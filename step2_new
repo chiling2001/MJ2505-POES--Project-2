@@ -1,0 +1,1006 @@
+"""Step 2: full-year DHNx network expansion using Benders cuts.
+Denmark (DK2): 10 consumers, 5 producers and 5 pipe options.
+"""
+from pathlib import Path
+from datetime import datetime
+from time import perf_counter
+from contextlib import redirect_stdout, contextmanager
+import argparse
+import subprocess
+import io
+import json
+import os
+import sys
+import warnings
+import re
+import numpy as np
+import pandas as pd
+import matplotlib
+if "ipykernel" not in sys.modules:
+    matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from scipy.optimize import linprog
+from pyomo.environ import ConstraintList, Constraint, Var, SolverFactory, value, Objective, NonNegativeReals, minimize
+from pyomo.opt.base.solvers import _extract_version
+from pyomo.opt import TerminationCondition
+import_messages = io.StringIO()
+with redirect_stdout(import_messages):
+    import dhnx
+    import oemof.solph as solph
+    from dhnx.optimization.optimization_models import setup_optimise_investment
+
+# 1. Settings
+BASE = Path.cwd()
+COUNTRY = "Denmark"
+REGION = "Near Copenhagen (DK2)"
+TIME_LIMIT = 900         
+MIP_GAP = 0.01             
+ABSOLUTE_GAP_EUR = 0.02
+MAX_ITERATIONS = 150
+DT, RATE, LIFE = 1.0, 0.05, 30
+TOL = 1e-5
+UNDERUSED_PERCENT = 10.0
+MASTER_TOL = 0.01
+REQUIRE_EACH_TYPE = False
+USE_PREVIOUS_SEED = True
+# Agreed baseline run.
+STEP1_RUN = "run_20261008_125119_943206"
+REQUIRED_PIPE_TYPES = {"DN-25", "DN-30", "DN-40", "DN-50", "DN-60"}
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--base", type=Path, default=BASE)
+parser.add_argument("--output", type=Path)
+parser.add_argument("--time-limit", type=float, default=TIME_LIMIT)
+parser.add_argument("--gap", type=float, default=MIP_GAP)
+parser.add_argument("--max-iterations", type=int, default=MAX_ITERATIONS)
+parser.add_argument("--seed", type=Path)
+parser.add_argument("--step1-results", type=Path)
+parser.add_argument("--check-inputs", action="store_true")
+parser.add_argument("--check-model", action="store_true")
+parser.add_argument("--use-previous-seed", action="store_true", default=USE_PREVIOUS_SEED)
+args, _ = parser.parse_known_args()
+if args.time_limit <= 0 or not 0 <= args.gap < 1 or args.max_iterations < 1:
+    raise ValueError("Invalid time limit, gap or iteration count.")
+BASE = args.base.expanduser().resolve()
+if not (BASE / "twn_data/consumers.csv").is_file():
+    raise FileNotFoundError("Open this notebook in MJ2505_Step2, or set BASE to that folder.")
+STEP1_RESULTS = args.step1_results or (BASE.parent / "MJ2505_Step1"
+    / "Step1_Denmark_full_year_results" / STEP1_RUN)
+RESULTS = BASE / "Step2_Denmark_full_year_results"
+OUT = args.output or RESULTS / datetime.now().strftime("run_%Y%m%d_%H%M%S_%f")
+OUT.mkdir(parents=True, exist_ok=True)
+CRF = RATE * (1 + RATE)**LIFE / ((1 + RATE)**LIFE - 1)
+print(f"Output folder: {OUT}", flush=True)
+(OUT / "optional_import_messages.log").write_text(import_messages.getvalue(), encoding="utf-8")
+
+def save_json(path, data):
+    path.write_text(json.dumps(data, indent=2, allow_nan=False), encoding="utf-8")
+
+def progress(stage, elapsed=0):
+    save_json(OUT / "progress.json", {"stage": stage, "elapsed_seconds": round(elapsed, 1),
+        "updated_at": datetime.now().isoformat(timespec="seconds")})
+
+@contextmanager
+def Heartbeat(stage):
+    start = perf_counter()
+    print(stage, flush=True)
+    progress(stage)
+    try:
+        yield
+    finally:
+        print(f"{stage}: {perf_counter()-start:.1f} s", flush=True)
+
+cbc_folder = Path(sys.prefix) / "Library/bin"
+if (cbc_folder / "cbc.exe").is_file():
+    os.environ["PATH"] = str(cbc_folder) + os.pathsep + os.environ.get("PATH", "")
+solver = SolverFactory("cbc")
+if not solver.available(exception_flag=False):
+    raise RuntimeError("CBC not found. Select the dhnx_env kernel or activate dhnx_env.")
+# Pyomo's default CBC version probe times out after 5 seconds.
+# Cache the actual version once, with a longer startup allowance.
+probe = subprocess.run([solver.executable(), "-stop"], timeout=60,
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=True)
+solver._version = _extract_version(probe.stdout)
+if solver._version is None:
+    raise RuntimeError("Could not read CBC version:\n" + probe.stdout)
+print(f"DHNx {dhnx.__version__}; oemof.solph {solph.__version__}")
+print(f"Study region: {COUNTRY}, {REGION}. Coordinates are schematic local metres.")
+
+# 2. Read and check the Step 2 inputs
+def id_sorted(values):
+    return sorted((str(v) for v in values), key=int)
+
+# Producer parameters.
+producer_inputs = pd.read_csv(BASE / "assumptions/heat_producers.csv", encoding="utf-8-sig",
+    dtype={"producer_id": str})
+producer_inputs["producer_id"] = producer_inputs["producer_id"].str.strip()
+producer_inputs = producer_inputs.set_index("producer_id")
+if not producer_inputs.index.is_unique or set(producer_inputs.index) != set(map(str, range(5))):
+    raise ValueError("heat_producers.csv must contain producer IDs 0,...,4 exactly once.")
+cost_columns = [c for c in producer_inputs.columns if c.startswith("heat_cost")]
+if len(cost_columns) != 1:
+    raise ValueError("Expected one heat_cost column in EUR/kWh of heat.")
+cost_column = cost_columns[0]
+producer_ids = id_sorted(producer_inputs.index)
+producer_inputs = producer_inputs.loc[producer_ids]
+producers = pd.DataFrame({"label": producer_inputs.plot_label, "technology": producer_inputs.technology,
+    "capacity_kW_heat": producer_inputs.capacity_kW.astype(float),
+    "heat_cost_EUR_kWh": producer_inputs[cost_column].astype(float)}, index=pd.Index(producer_ids, name="producer_id"))
+
+# Convert input prices to EUR/kWh of heat.
+def recalculated_heat_cost(row):
+    vom = float(row.variable_OM_EUR_per_MWh_heat)
+    conversion = [row.get(c) for c in ["efficiency_LHV", "COP", "efficiency_electric"]]
+    present = [float(v) for v in conversion if pd.notna(v)]
+    if len(present) != 1 or not np.isfinite(present[0]) or present[0] <= 0:
+        raise ValueError(f"Producer {row.name}: specify one positive efficiency or COP.")
+    if pd.notna(row.get("efficiency_LHV")) and pd.notna(row.get("fuel_price_EUR_per_MWh_input")):
+        return (float(row.fuel_price_EUR_per_MWh_input) / float(row.efficiency_LHV) + vom) / 1000
+    if pd.notna(row.get("COP")):
+        return (float(row.electricity_price_EUR_per_MWh_input) / float(row.COP) + vom) / 1000
+    if pd.notna(row.get("efficiency_electric")):
+        return (float(row.electricity_price_EUR_per_MWh_input) / float(row.efficiency_electric) + vom) / 1000
+    raise ValueError(f"Producer {row.name}: no efficiency, COP or electric efficiency given.")
+check_cost = producer_inputs.apply(recalculated_heat_cost, axis=1)
+if not np.allclose(check_cost.to_numpy(), producers.heat_cost_EUR_kWh.to_numpy(), atol=1e-6, rtol=0):
+    raise ValueError("heat_cost column disagrees with fuel/electricity price, efficiency/COP and VOM:\n"
+        + pd.DataFrame({"file": producers.heat_cost_EUR_kWh, "recalculated": check_cost}).to_string())
+# Use full precision after checking the CSV cost.
+producers["heat_cost_EUR_kWh"] = check_cost
+if (producers.capacity_kW_heat <= 0).any() or (check_cost < 0).any() or not np.isfinite(
+        producers[["capacity_kW_heat", "heat_cost_EUR_kWh"]].to_numpy()).all():
+    raise ValueError("Invalid producer capacity or heat cost.")
+
+frames = {}
+for group in ["consumers", "producers", "forks", "pipes"]:
+    frame = pd.read_csv(BASE / f"twn_data/{group}.csv", index_col="id")
+    frame.index = frame.index.map(str)
+    frame.index.name = "id"
+    if not frame.index.is_unique or frame.isna().any().any():
+        raise ValueError(f"Duplicate IDs or missing values in {group}.csv")
+    frames[group] = frame
+consumer_ids = id_sorted(frames["consumers"].index)
+if consumer_ids != list(map(str, range(10))):
+    raise ValueError("Step 2 requires ten consumers with IDs 0,...,9.")
+for group in ["consumers", "producers", "forks"]:
+    if not np.isfinite(frames[group][["lat", "lon"]].to_numpy(dtype=float)).all():
+        raise ValueError(f"Non-finite coordinates in {group}.csv")
+    if "active" in frames[group] and not (frames[group].active == 1).all():
+        raise ValueError(f"This model expects all listed {group} to be active.")
+demand = pd.read_csv(BASE / "twn_data/sequences/consumers-heat_flow.csv",
+    index_col="timestep", float_precision="round_trip")
+demand.columns = [str(c).strip() for c in demand.columns]
+if demand.shape != (8760, len(consumer_ids)) or sorted(demand.columns, key=int) != consumer_ids:
+    raise ValueError(f"Expected 8760 hours and consumer columns {consumer_ids}.")
+demand = demand[consumer_ids]
+if not np.array_equal(demand.index, np.arange(8760)):
+    raise ValueError("Expected ordered timestep values 0,...,8759.")
+if not np.isfinite(demand.to_numpy()).all() or (demand < 0).any().any():
+    raise ValueError("Non-finite or negative heat demand.")
+if set(frames["producers"].index) != set(producer_ids):
+    raise ValueError(f"producers.csv ids {sorted(frames['producers'].index)} do not match "
+        f"heat_producers.csv ids {producer_ids}.")
+if not np.allclose(frames["consumers"].loc[consumer_ids, "P_heat_max"], demand.max(), atol=1e-5, rtol=0):
+    raise ValueError("Consumer peaks do not match the hourly data.")
+# This schematic scenario uses straight routes in local metres.
+route_pairs = frames["pipes"].apply(lambda r: tuple(sorted([r.from_node, r.to_node])), axis=1)
+if route_pairs.duplicated().any() or (frames["pipes"].length <= 0).any() or not np.isfinite(frames["pipes"].length).all():
+    raise ValueError("Candidate routes must be unique and have positive finite lengths.")
+coordinates = {f"{group}-{i}": (float(r.lon), float(r.lat)) for group in ["consumers", "producers", "forks"]
+    for i, r in frames[group].iterrows()}
+for route, row in frames["pipes"].iterrows():
+    if row.from_node not in coordinates or row.to_node not in coordinates:
+        raise ValueError(f"Route {route} refers to an unknown node: {row.from_node} -> {row.to_node}.")
+    (x1, y1), (x2, y2) = coordinates[row.from_node], coordinates[row.to_node]
+    if abs(np.hypot(x1-x2, y1-y2) - float(row.length)) > 0.01:
+        raise ValueError(f"Route {route} length {row.length} m differs from the coordinate distance "
+            f"{np.hypot(x1-x2, y1-y2):.3f} m.")
+unconnected = set(coordinates) - set(frames["pipes"].from_node) - set(frames["pipes"].to_node)
+if unconnected:
+    raise ValueError(f"Nodes without any candidate route: {sorted(unconnected)}")
+mapping = pd.read_csv(BASE / "assumptions/consumer_load_mapping.csv", dtype={"consumer_id": str})
+mapping = mapping.set_index("consumer_id")
+if not mapping.index.is_unique or set(mapping.index) != set(consumer_ids):
+    raise ValueError("consumer_load_mapping.csv must list every consumer exactly once.")
+if not np.allclose(mapping.loc[consumer_ids, "peak_kW"], demand.max(), atol=1e-5, rtol=0):
+    raise ValueError("Mapped peak_kW values do not match the hourly data; review the mapping file.")
+if mapping.loc[list(map(str, range(5))), "source_column"].tolist() != ["Load 2", "Load 4", "Load 10", "Load 16", "Load 22"]:
+    raise ValueError("Retain the five Step 1 consumer-profile assignments.")
+if mapping.source_column.duplicated().any() or not (mapping.time_steps == len(demand)).all():
+    raise ValueError("Use ten distinct demand profiles with 8760 timesteps each.")
+catalogue = pd.read_csv(BASE / "invest_data/network/pipes.csv")
+pipe_types = list(catalogue.label_3)
+if set(pipe_types) != REQUIRED_PIPE_TYPES or catalogue.label_3.duplicated().any() or not (catalogue.nonconvex == 1).all():
+    raise ValueError("Step 2 requires discrete DN-25, DN-30, DN-40, DN-50 and DN-60 options.")
+if not (catalogue.active == 1).all() or (catalogue.fix_costs < 0).any() or (catalogue.l_factor_fix < 0).any():
+    raise ValueError("Pipe options must be active, with nonnegative costs and losses.")
+if not np.isfinite(catalogue.select_dtypes(include="number")).all().all():
+    raise ValueError("Invalid pipe catalogue.")
+if (catalogue.cap_min < 0).any() or (catalogue.cap_max < catalogue.cap_min).any():
+    raise ValueError("Invalid catalogue capacity bounds.")
+# Using cap_max is equivalent here: capacity has no variable capital cost or loss.
+if not np.allclose(catalogue.capex_pipes, 0) or not np.allclose(catalogue.l_factor, 0):
+    raise ValueError("This version requires capex_pipes=0 and l_factor=0; review before changing them.")
+if demand.max().max() > catalogue.cap_max.max():
+    raise ValueError("A consumer peak exceeds the largest pipe capacity; no service pipe can supply it.")
+capital_catalogue = catalogue.copy()
+catalogue["fix_costs"] *= CRF
+catalogue["capex_pipes"] *= CRF
+HOURS = len(demand)
+loads = demand.to_numpy()
+all_states = demand.drop_duplicates().reset_index(drop=True)
+state_ids = demand.groupby(list(demand.columns), sort=False).ngroup().to_numpy(dtype=int)
+if not np.array_equal(all_states.to_numpy()[state_ids], loads):
+    raise RuntimeError("Exact repeated-state mapping failed.")
+n_producers = len(producer_ids)
+print(f"Full year: {HOURS} hours; {len(all_states)} exact distinct load states.")
+print(f"{len(consumer_ids)} consumers; {n_producers} producers; {len(frames['pipes'])} candidate routes; "
+    f"pipe types {pipe_types}.")
+print(f"Coincident peak {demand.sum(axis=1).max():.2f} kW; installed producer capacity "
+    f"{producers.capacity_kW_heat.sum():.0f} kW.")
+print("Producer assumptions:\n" + producers.round(6).to_string())
+if producers.capacity_kW_heat.sum() < demand.sum(axis=1).max():
+    raise ValueError("Total producer capacity is below the coincident peak demand.")
+producers.to_csv(OUT / "producer_assumptions.csv")
+mapping.to_csv(OUT / "consumer_load_mapping.csv")
+capital_catalogue.to_csv(OUT / "pipe_capital_parameters.csv", index=False)
+assumptions = {
+    "country": COUNTRY, "region": REGION, "hours": HOURS, "time_step_h": DT,
+    "units": "kW, kWh, EUR; schematic coordinates in metres",
+    "annualisation": {"interest_rate": RATE, "life_years": LIFE, "CRF": CRF},
+    "objective": "Annualised pipe investment + full-year variable generation cost",
+    "variables": "Binary pipe choices, hourly pipe flows and producer heat output",
+    "constraints": "At most one type per route; nodal heat balance with losses; pipe and producer capacities; no shortage",
+    "method": "DHNx investment master with exact annual Benders cuts; only identical load states combined",
+    "producer_investment": "Excluded; producer capacities prescribed",
+    "generation": "Constant electricity price and COP; hypothetical free, continuously available waste heat",
+    "network": "Constant losses on built pipes; all candidate routes re-optimised; no sunk assets",
+    "limitations": "No hydraulic, temperature, ramping, storage, outage or environmental model",
+    "settings": "Section 1; model_settings.csv is documentation only",
+    "input_files_used": ["assumptions/heat_producers.csv", "assumptions/consumer_load_mapping.csv",
+        "twn_data/consumers.csv", "twn_data/producers.csv", "twn_data/forks.csv", "twn_data/pipes.csv",
+        "twn_data/sequences/consumers-heat_flow.csv", "invest_data/network/pipes.csv"]}
+save_json(OUT / "assumptions.json", assumptions)
+producer_inputs.to_csv(OUT / "producer_input_parameters.csv")
+# Check retained Step 1 inputs.
+baseline_files = ["summary.json", "assumptions.json", "selected_pipes.csv", "producer_assumptions.csv",
+    "consumer_load_mapping.csv", "pipe_capital_parameters.csv", "hourly_results.csv"]
+missing = [name for name in baseline_files if not (STEP1_RESULTS / name).is_file()]
+if missing:
+    raise FileNotFoundError(f"Step 2 comparisons require the agreed Step 1 exports: {missing}. "
+        "Set STEP1_RESULTS or --step1-results to that run folder.")
+baseline = json.loads((STEP1_RESULTS / "summary.json").read_text(encoding="utf-8"))
+baseline_assumptions = json.loads((STEP1_RESULTS / "assumptions.json").read_text(encoding="utf-8"))
+if baseline.get("validation", {}).get("infeasible_hour_count") != 0:
+    raise ValueError("The reference Step 1 run has not passed full-year feasibility validation.")
+baseline_hours = pd.read_csv(STEP1_RESULTS / "hourly_results.csv", index_col="timestep")
+original_ids = list(map(str, range(5)))
+if not np.array_equal(baseline_hours.index, demand.index) or not np.allclose(
+        baseline_hours[[f"consumer_{i}" for i in original_ids]].to_numpy(),
+        demand[original_ids].to_numpy(), atol=TOL, rtol=0):
+    raise ValueError("The original five hourly demand profiles differ from the Step 1 run.")
+baseline_producers = pd.read_csv(STEP1_RESULTS / "producer_assumptions.csv",
+    dtype={"producer_id": str}).set_index("producer_id")
+for column in ["capacity_kW_heat", "heat_cost_EUR_kWh"]:
+    if not np.allclose(producers.loc[["0", "1"], column], baseline_producers.loc[["0", "1"], column], atol=1e-8, rtol=0):
+        raise ValueError(f"Retained producer {column} differs from Step 1; declare the change before comparing.")
+for old, new in [("efficiency_LHV", "efficiency_LHV"), ("fuel_EUR_MWh_input", "fuel_price_EUR_per_MWh_input"),
+        ("variable_OM_EUR_MWh_heat", "variable_OM_EUR_per_MWh_heat")]:
+    if not np.allclose(producer_inputs.loc[["0", "1"], new], baseline_producers.loc[["0", "1"], old]):
+        raise ValueError(f"The original boiler input {new} has changed from Step 1.")
+for key, number in [("interest_rate", RATE), ("life_years", LIFE)]:
+    if not np.isclose(baseline_assumptions["annualisation"][key], number):
+        raise ValueError(f"Annualisation {key} differs from Step 1.")
+baseline_town = STEP1_RESULTS / "master_inputs/model_inputs/twn_data"
+for group in ["consumers", "producers", "forks"]:
+    old = pd.read_csv(baseline_town / f"{group}.csv", index_col="id")
+    old.index = old.index.map(str)
+    if not set(old.index).issubset(frames[group].index) or not np.allclose(
+            frames[group].loc[old.index, ["lon", "lat"]], old[["lon", "lat"]], atol=TOL, rtol=0):
+        raise ValueError(f"Original {group} locations have changed; review the expansion assumptions.")
+baseline_routes = pd.read_csv(baseline_town / "pipes.csv", dtype={"id": str})
+for row in baseline_routes.itertuples():
+    if row.id not in frames["pipes"].index:
+        raise ValueError(f"Original candidate route {row.id} is missing.")
+    current = frames["pipes"].loc[row.id]
+    if (row.from_node, row.to_node) != (current.from_node, current.to_node) or not np.isclose(row.length, current.length):
+        raise ValueError(f"Original candidate route {row.id} has changed.")
+baseline_types = pd.read_csv(STEP1_RESULTS / "pipe_capital_parameters.csv").set_index("label_3")
+for pipe_type in baseline_types.index:
+    columns = ["cap_min", "cap_max", "fix_costs", "l_factor", "l_factor_fix", "capex_pipes"]
+    if not np.allclose(capital_catalogue.set_index("label_3").loc[pipe_type, columns].astype(float),
+            baseline_types.loc[pipe_type, columns].astype(float), atol=1e-10, rtol=0):
+        raise ValueError(f"Retained {pipe_type} parameters differ from Step 1; document an intentional change.")
+if not producer_inputs.technology.str.contains("heat pump", case=False, regex=False).any():
+    raise ValueError("Step 2 must contain at least one heat pump.")
+
+# Keep source data and assumptions alongside the results.
+pipe_assumptions = capital_catalogue.copy()
+pipe_assumptions["units"] = "capacity: kW; fix_costs: EUR/m initial; l_factor_fix: kW/m"
+pipe_assumptions["source"] = "DHNx course tutorial; group parameter assumptions"
+pipe_assumptions["note"] = "DN-32/63 proxies renamed DN-30/60; cap_min is not minimum hourly flow"
+pipe_assumptions.to_csv(OUT / "pipe_assumptions.csv", index=False)
+location_rows = []
+for group in ["consumers", "producers", "forks"]:
+    original = pd.read_csv(baseline_town / f"{group}.csv", dtype={"id": str}).id.tolist()
+    for node, row in frames[group].iterrows():
+        rationale = "Retained from Step 1" if node in original else {
+            "consumers": "Eastern extension of the same schematic block layout; 5 m service connections",
+            "producers": "Distributed candidate supply points; assumed sites, not optimised locations",
+            "forks": "Junctions provide alternative trunk/branch routes; they have zero heat demand"}[group]
+        location_rows.append({"node": f"{group}-{node}", "lon_x_m": row.lon, "lat_y_m": row.lat,
+            "retained_from_step1": node in original, "rationale": rationale, "source": "Group schematic layout assumption"})
+pd.DataFrame(location_rows).to_csv(OUT / "connection_point_assumptions.csv", index=False)
+frames["pipes"].to_csv(OUT / "candidate_connections.csv")
+if args.check_inputs:
+    print("Input checks passed. No optimisation was run.")
+    raise SystemExit(0)
+
+def build_design(states, rows, weights, folder):
+    snap = folder / "model_inputs"
+    for name in ["twn_data/sequences", "invest_data/network", "invest_data/consumers", "invest_data/producers"]:
+        (snap / name).mkdir(parents=True, exist_ok=True)
+    for group, source in frames.items():
+        frame = source.copy()
+        if group == "consumers":
+            frame["P_heat_max"] = states.max().reindex(frame.index)
+        if group == "producers":
+            frame["heat.source.nominal_capacity"] = producers.capacity_kW_heat.reindex(frame.index)
+            frame["heat.source.variable_costs"] = producers.heat_cost_EUR_kWh.reindex(frame.index)
+        frame.to_csv(snap / f"twn_data/{group}.csv")
+    states.to_csv(snap / "twn_data/sequences/consumers-heat_flow.csv")
+    catalogue.to_csv(snap / "invest_data/network/pipes.csv", index=False)
+    bus = pd.DataFrame({"label_2": ["heat"], "active": [1], "excess": [0], "shortage": [0],
+        "shortage costs": [99999], "excess costs": [99999]})
+    for group in ["consumers", "producers"]:
+        bus.to_csv(snap / f"invest_data/{group}/bus.csv", index=False)
+    pd.DataFrame({"label_2": ["heat"], "active": [1], "nominal_capacity": [1.0]}).to_csv(
+        snap / "invest_data/consumers/demand.csv", index=False)
+    pd.DataFrame({"label_2": ["heat"], "active": [1]}).to_csv(snap / "invest_data/producers/source.csv", index=False)
+    rep = states.copy()
+    rep.insert(0, "source_timestep", rows)
+    rep.insert(1, "hour_count", weights.astype(int))
+    rep.to_csv(folder / "constraint_hours.csv")
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        network = dhnx.network.ThermalNetwork().from_csv_folder(str(snap / "twn_data"))
+        options = dhnx.input_output.load_invest_options(str(snap / "invest_data"))
+        opti = setup_optimise_investment(network, options, heat_demand="series", num_ts=len(states),
+            time_res=DT, start_date="2025-01-01", frequence="h", solver="cbc", bidirectional_pipes=True)
+        opti.es.timeincrement = pd.Series(weights * DT)
+        opti.om = solph.Model(opti.es)
+    messages = sorted({f"{type(w.message).__name__}: {w.message}" for w in captured})
+    (folder / "model_warnings.log").write_text("\n".join(messages), encoding="utf-8")
+    model = opti.om
+    model.pipe_choices = ConstraintList()
+    choices, types, pipes = {}, {t: [] for t in pipe_types}, []
+    cat = capital_catalogue.set_index("label_3")
+    for key in model.InvestmentFlowBlock.invest_status:
+        node = key[0]
+        label = node.label
+        if not isinstance(label, tuple) or len(label) != 4 or label[0] != "infrastructure" or label[2] not in types:
+            continue
+        a, b = next(iter(node.inputs)), next(iter(node.outputs))
+        status = model.InvestmentFlowBlock.invest_status[key]
+        investment = model.InvestmentFlowBlock.invest[key]
+        pipe_type = label[2]
+        model.pipe_choices.add(investment == float(cat.loc[pipe_type, "cap_max"]) * status)
+        route = tuple(sorted([a.label[3], b.label[3]]))
+        choices.setdefault(route, []).append(status)
+        types[pipe_type].append(status)
+        pipes.append({"node": node, "a": a, "b": b, "status": status,
+            "capacity": investment, "type": pipe_type})
+    expected = {tuple(sorted([r.from_node, r.to_node])) for r in frames["pipes"].itertuples()}
+    if set(choices) != expected or any(len(c) != len(pipe_types) for c in choices.values()):
+        raise RuntimeError(f"Failed to identify the {len(pipe_types)} discrete options on every route.")
+    for group in choices.values():
+        model.pipe_choices.add(sum(group) <= 1)
+    if REQUIRE_EACH_TYPE:
+        for group in types.values():
+            model.pipe_choices.add(sum(group) >= 1)
+    sources = {}
+    for (a, b), flow in opti.es.flows().items():
+        if isinstance(a.label, tuple) and a.label[:3] == ("producers", "heat", "source"):
+            producer = a.label[3].split("-", 1)[1]
+            sources[producer] = (a, b)
+            if not np.isclose(flow.nominal_capacity, producers.loc[producer, "capacity_kW_heat"]):
+                raise RuntimeError(f"Producer {producer} capacity was not applied.")
+            if not np.isclose(flow.variable_costs[0], producers.loc[producer, "heat_cost_EUR_kWh"]):
+                raise RuntimeError(f"Producer {producer} cost was not applied.")
+    if set(sources) != set(producer_ids):
+        raise RuntimeError(f"Expected heat sources {producer_ids}; DHNx built {sorted(sources)}.")
+    return opti, pipes, sources
+
+
+def fixed_network(opti, pipes):
+    records = []
+    flow_data = opti.es.flows()
+    for pipe in pipes:
+        if value(pipe["status"]) < 0.5:
+            continue
+        node, a, b = pipe["node"], pipe["a"], pipe["b"]
+        capacity = float(value(pipe["capacity"]))
+        loss = float(node.heat_loss_factor[0]*capacity + node.heat_loss_factor_fix[0])
+        fin, fout = flow_data[a, node], flow_data[node, b]
+        lower = max(float(fout.minimum[0])*capacity, float(fin.minimum[0])*capacity-loss)
+        upper = min(float(fout.maximum[0])*capacity, float(fin.maximum[0])*capacity-loss)
+        route = frames["pipes"].loc[(frames["pipes"].from_node == a.label[3])
+            & (frames["pipes"].to_node == b.label[3])]
+        if len(route) != 1 or lower > upper:
+            raise RuntimeError("Invalid fixed-pipe route or flow bounds.")
+        row = route.iloc[0]
+        records.append({"pipe_id": route.index[0], "from_node": a.label[3], "to_node": b.label[3],
+            "hp_type": pipe["type"], "length_m": float(row.length), "capacity_kW": capacity,
+            "loss_kW": loss, "output_lower_kW": lower, "output_upper_kW": upper})
+    selected = pd.DataFrame(records)
+    if selected.empty or selected.pipe_id.duplicated().any():
+        raise RuntimeError("Invalid installed pipe choices.")
+    cat = capital_catalogue.set_index("label_3")
+    selected["initial_cost_EUR"] = [r.length_m*float(cat.loc[r.hp_type, "fix_costs"])
+        for r in selected.itertuples()]
+    selected["annualised_cost_EUR"] = selected.initial_cost_EUR*CRF
+    nodes = [f"{group}-{i}" for group in ["consumers", "producers", "forks"] for i in frames[group].index]
+    indices = {node: i for i, node in enumerate(nodes)}
+    count = len(selected)
+    matrix = np.zeros((len(nodes), count+n_producers))
+    losses = np.zeros(len(nodes))
+    for k, row in enumerate(selected.itertuples()):
+        matrix[indices[row.from_node], k] -= 1
+        matrix[indices[row.to_node], k] += 1
+        losses[indices[row.from_node]] += row.loss_kW
+    for k, producer in enumerate(producer_ids):
+        matrix[indices[f"producers-{producer}"], count+k] = 1
+    bounds = list(zip(selected.output_lower_kW, selected.output_upper_kW))
+    bounds += [(0, float(producers.loc[i, "capacity_kW_heat"])) for i in producer_ids]
+    costs = np.r_[np.zeros(count), producers.loc[producer_ids, "heat_cost_EUR_kWh"].to_numpy()]
+    def dispatch_lp(load):
+        rhs = losses.copy()
+        for k, consumer in enumerate(consumer_ids):
+            rhs[indices[f"consumers-{consumer}"]] += float(load[k])
+        return linprog(costs, A_eq=matrix, b_eq=rhs, bounds=bounds, method="highs"), rhs
+    return selected, matrix, bounds, dispatch_lp
+
+def validate_year(selected, matrix, bounds, dispatch_lp, folder):
+    flows = np.full((len(all_states), len(selected)+n_producers), np.nan)
+    failed, max_residual, max_bound_error = [], 0.0, 0.0
+    start = perf_counter()
+    lower, upper = np.asarray(bounds).T
+    for k, load in enumerate(all_states.to_numpy()):
+        result, rhs = dispatch_lp(load)
+        if result.status == 2:
+            failed.append(k)
+        elif not result.success:
+            raise RuntimeError(f"Operational LP failed with status {result.status}: {result.message}")
+        else:
+            flows[k] = result.x
+            max_residual = max(max_residual, float(np.max(np.abs(matrix@result.x-rhs))))
+            max_bound_error = max(max_bound_error, float(np.max(lower-result.x)), float(np.max(result.x-upper)))
+        if (k+1) % 1000 == 0:
+            print(f"Annual validation: {k+1}/{len(all_states)} exact states; {perf_counter()-start:.1f} s.", flush=True)
+    failed_hours = np.flatnonzero(np.isin(state_ids, failed))
+    info = {"all_hours_checked": HOURS, "exact_states_checked": len(all_states),
+        "infeasible_state_count": len(failed), "infeasible_hour_count": len(failed_hours),
+        "max_node_balance_error_kW": max_residual, "max_flow_bound_error_kW": max_bound_error}
+    save_json(folder / "annual_validation.json", info)
+    if max_residual > TOL or max_bound_error > TOL:
+        raise RuntimeError("Operational LP failed independent balance or capacity validation.")
+    return flows, failed_hours, info
+
+
+# 3. Build the DHNx master and full-year dispatch model
+total = demand.sum(axis=1)
+critical = {int(total.idxmax()), int(total.idxmin())}
+critical.update(int(h) for h in total.nlargest(6).index)         
+for column in consumer_ids:
+    critical.update([int(demand[column].idxmax()), int(demand[column].idxmin())])
+rows = demand.loc[sorted(critical)].drop_duplicates().index.to_numpy(dtype=int)
+states = demand.loc[rows].reset_index(drop=True)
+states.index.name = "timestep"
+folder = OUT / "master_inputs"
+folder.mkdir()
+with Heartbeat("Building DHNx investment master"):
+    opti, pipes, sources = build_design(states, rows, np.ones(len(states)), folder)
+model = opti.om
+model.objective.deactivate()
+model.annual_operation_cost = Var(within=NonNegativeReals,
+    bounds=(float(demand.sum().sum()*DT*producers.heat_cost_EUR_kWh.min()), None))
+model.benders_cuts = ConstraintList()
+model.upper_cutoff = ConstraintList()
+
+# One option variable per route and pipe type, directly taken from the DHNx master.
+route_ids = list(frames["pipes"].index)
+route_index = {route: i for i, route in enumerate(route_ids)}
+nodes = [f"{group}-{i}" for group in ["consumers", "producers", "forks"] for i in frames[group].index]
+node_index = {node: i for i, node in enumerate(nodes)}
+R, N, P = len(route_ids), len(nodes), len(pipes)
+A = np.zeros((N, R+n_producers))
+for route, row in frames["pipes"].iterrows():
+    k = route_index[route]
+    A[node_index[row.from_node], k] -= 1
+    A[node_index[row.to_node], k] += 1
+for j, producer in enumerate(producer_ids):
+    A[node_index[f"producers-{producer}"], R+j] = 1
+loss_rhs = np.zeros((N, P))
+lower_map = np.zeros((R, P))
+upper_map = np.zeros((R, P))
+capex = np.zeros(P)
+cat = capital_catalogue.set_index("label_3")
+for j, pipe in enumerate(pipes):
+    a, b, node = pipe["a"], pipe["b"], pipe["node"]
+    matches = frames["pipes"].loc[(frames["pipes"].from_node == a.label[3])
+        & (frames["pipes"].to_node == b.label[3])]
+    if len(matches) != 1:
+        raise RuntimeError("Cannot identify an oriented DHNx pipe option.")
+    route = matches.index[0]
+    pipe["route_id"] = route
+    k = route_index[route]
+    capacity = float(cat.loc[pipe["type"], "cap_max"])
+    loss = float(node.heat_loss_factor[0]*capacity+node.heat_loss_factor_fix[0])
+    fin, fout = opti.es.flows()[a, node], opti.es.flows()[node, b]
+    lower_map[k, j] = max(float(fout.minimum[0])*capacity, float(fin.minimum[0])*capacity-loss)
+    upper_map[k, j] = min(float(fout.maximum[0])*capacity, float(fin.maximum[0])*capacity-loss)
+    if lower_map[k, j] > upper_map[k, j]:
+        raise RuntimeError("Catalogue gives invalid pipe operating bounds.")
+    loss_rhs[node_index[a.label[3]], j] = loss
+    capex[j] = float(matches.iloc[0].length*cat.loc[pipe["type"], "fix_costs"]*CRF)
+y_variables = [pipe["status"] for pipe in pipes]
+model.annual_total_cost = Objective(expr=sum(float(capex[j])*y_variables[j] for j in range(P))
+    + model.annual_operation_cost, sense=minimize)
+state_weights = np.bincount(state_ids, minlength=len(all_states)).astype(float)*DT
+if state_weights.sum() != HOURS*DT:
+    raise RuntimeError("Exact annual hour weights failed.")
+state_rhs = np.zeros((len(all_states), N))
+for j, consumer in enumerate(consumer_ids):
+    state_rhs[:, node_index[f"consumers-{consumer}"]] = all_states[consumer].to_numpy()
+costs = np.r_[np.zeros(R), producers.loc[producer_ids, "heat_cost_EUR_kWh"].to_numpy()]
+producer_bounds = [(0, float(producers.loc[i, "capacity_kW_heat"])) for i in producer_ids]
+phase_A = np.c_[A, np.eye(N), -np.eye(N)]
+phase_costs = np.r_[np.zeros(R+n_producers), np.ones(2*N)]
+state_order = np.argsort(all_states.sum(axis=1).to_numpy())[::-1]
+if args.check_model:
+    print(f"Model checks passed: {R} routes, {P} pipe choices, {n_producers} producers, "
+        f"{len(all_states)} exact annual states. No optimisation was run.")
+    raise SystemExit(0)
+best_y, best_upper, global_lower = None, float("inf"), float(model.annual_operation_cost.lb)
+history, evaluated = [], {}
+search_start = perf_counter()
+
+def set_choices(y):
+    for j, pipe in enumerate(pipes):
+        pipe["status"].set_value(int(y[j]))
+        pipe["capacity"].set_value(float(cat.loc[pipe["type"], "cap_max"])*int(y[j]))
+
+def annual_evaluation(y, add_cuts=True):
+    # Each hourly LP is exactly the fixed-pipe DHNx balance and flow bounds.
+    lower, upper = lower_map@y, upper_map@y
+    bounds = list(zip(lower, upper))+producer_bounds
+    losses = loss_rhs@y
+    operating, failures = 0.0, []
+    dual_rhs, dual_lower, dual_upper = np.zeros(N), np.zeros(R), np.zeros(R)
+    lo, hi = np.asarray(bounds).T
+    maximum_residual, maximum_bound_error = 0.0, 0.0
+    phase_bounds = bounds+[(0, None)]*(2*N)
+    for position, s in enumerate(state_order):
+        rhs = state_rhs[s]+losses
+        result = linprog(costs, A_eq=A, b_eq=rhs, bounds=bounds, method="highs")
+        if result.status == 2:
+            phase = linprog(phase_costs, A_eq=phase_A, b_eq=rhs, bounds=phase_bounds, method="highs")
+            if not phase.success or phase.fun <= TOL:
+                raise RuntimeError("Cannot obtain a reliable feasibility cut.")
+            g = loss_rhs.T@phase.eqlin.marginals + lower_map.T@phase.lower.marginals[:R] \
+                + upper_map.T@phase.upper.marginals[:R]
+            intercept = float(phase.fun-g@y)
+            if add_cuts:
+                model.benders_cuts.add(intercept+sum(float(g[j])*y_variables[j] for j in range(P)) <= 1e-7)
+            failures.append(int(s))
+            # Any separating cut is valid, remaining states are checked on later candidates.
+            if len(failures) >= 16:
+                break
+        elif not result.success:
+            raise RuntimeError(f"Annual LP status {result.status}: {result.message}")
+        else:
+            x = result.x
+            maximum_residual = max(maximum_residual, float(np.max(np.abs(A@x-rhs))))
+            maximum_bound_error = max(maximum_bound_error, float(np.max(lo-x)), float(np.max(x-hi)))
+            # Primal-dual equality checks guard the sign and value of cost cuts.
+            dual_value = float(rhs@result.eqlin.marginals+lo@result.lower.marginals+hi@result.upper.marginals)
+            if not np.isclose(result.fun, dual_value, atol=1e-7, rtol=1e-8):
+                raise RuntimeError("Hourly primal-dual equality check failed.")
+            w = state_weights[s]
+            operating += float(result.fun)*w
+            dual_rhs += w*result.eqlin.marginals
+            dual_lower += w*result.lower.marginals[:R]
+            dual_upper += w*result.upper.marginals[:R]
+        if (position+1) % 2000 == 0:
+            print(f"Full-year evaluation: {position+1}/{len(all_states)} exact states.", flush=True)
+    if maximum_residual > TOL or maximum_bound_error > TOL:
+        raise RuntimeError("Annual LP node balance or variable bound checks failed.")
+    if failures:
+        return {"feasible": False, "separating_infeasible_states": failures}
+    if add_cuts:
+        # Sum hourly duals first, then multiply the constant matrices for each design.
+        gradient = loss_rhs.T@dual_rhs + lower_map.T@dual_lower + upper_map.T@dual_upper
+        intercept = float(operating-gradient@y)-0.01
+        model.benders_cuts.add(model.annual_operation_cost >= intercept
+            +sum(float(gradient[j])*y_variables[j] for j in range(P)))
+    return {"feasible": True, "annual_operating_cost_EUR": operating,
+        "annual_total_cost_EUR": float(capex@y+operating), "hours_checked": HOURS,
+        "max_node_balance_error_kW": maximum_residual, "max_flow_bound_error_kW": maximum_bound_error}
+
+def check_constraints():
+    violation = 0.0
+    for var in model.component_data_objects(Var, active=True):
+        number = value(var)
+        if not np.isfinite(number):
+            raise RuntimeError("Non-finite DHNx master value.")
+        if var.has_lb():
+            violation = max(violation, value(var.lb)-number)
+        if var.has_ub():
+            violation = max(violation, number-value(var.ub))
+        if var.is_integer():
+            violation = max(violation, abs(number-round(number)))
+    for constraint in model.component_data_objects(Constraint, active=True):
+        body = value(constraint.body)
+        if constraint.has_lb():
+            violation = max(violation, value(constraint.lower)-body)
+        if constraint.has_ub():
+            violation = max(violation, body-value(constraint.upper))
+    if violation > MASTER_TOL:
+        raise RuntimeError(f"DHNx master violated a constraint by {violation}.")
+    return violation
+
+def accept_incumbent(y, evaluation):
+    global best_y, best_upper
+    if evaluation["feasible"] and evaluation["annual_total_cost_EUR"] < best_upper:
+        best_y = y.copy()
+        best_upper = evaluation["annual_total_cost_EUR"]
+        set_choices(best_y)
+        selected, _, _, _ = fixed_network(opti, pipes)
+        selected.to_csv(OUT / "best_feasible_pipes.csv", index=False)
+        save_json(OUT / "best_feasible_cost.json", evaluation)
+        model.upper_cutoff.add(model.annual_total_cost <= best_upper+0.01)
+
+def finite_bound(number):
+    try:
+        number = float(number)
+        return number if np.isfinite(number) and abs(number) < 1e40 else None
+    except (ValueError, TypeError):
+        return None
+
+def relative_gap():
+    return max(0.0, best_upper-global_lower)/max(abs(best_upper), 1e-10) if best_y is not None else None
+
+# 4. Check an optional previous design
+seed_path = args.seed
+if seed_path is None and args.use_previous_seed:
+    seeds = list(RESULTS.glob("run_*/selected_pipes.csv"))
+    if seeds:
+        # Rank saved runs by reported cost, then recheck the chosen design using current inputs.
+        def saved_cost(path):
+            summary_path = path.parent / "summary.json"
+            return json.loads(summary_path.read_text()).get("validated_annual_total_cost_EUR", float("inf"))
+        seed_path = min(seeds, key=saved_cost)
+if seed_path is not None:
+    print(f"Seed design: {seed_path}")
+    seed = pd.read_csv(seed_path, dtype={"pipe_id": str})
+    requested = set(zip(seed.pipe_id, seed.hp_type))
+    available = {(pipe["route_id"], pipe["type"]) for pipe in pipes}
+    if not requested.issubset(available) or seed.pipe_id.duplicated().any():
+        raise ValueError("Seed choices do not match the current candidate routes.")
+    seed_y = np.array([int((p["route_id"], p["type"]) in requested) for p in pipes])
+    set_choices(seed_y)
+    with Heartbeat("Rechecking the previous design against every annual load state"):
+        evaluation = annual_evaluation(seed_y)
+    if evaluation["feasible"]:
+        evaluated[tuple(seed_y)] = evaluation
+        accept_incumbent(seed_y, evaluation)
+        print(f"Validated seed annual cost: EUR {best_upper:,.2f}", flush=True)
+    else:
+        print("The previous design failed current inputs; generated feasibility cuts instead.")
+
+# 5. Full-year Benders optimisation and Step 1 comparison
+print(f"Annual target: relative gap <= {args.gap:.3%}, or absolute gap <= EUR {ABSOLUTE_GAP_EUR:.2f}; "
+    f"search budget {args.time_limit:.0f} s.")
+stop_reason = "iteration_limit"
+try:
+    for iteration in range(1, args.max_iterations+1):
+        remaining = args.time_limit-(perf_counter()-search_start)
+        if remaining <= 0:
+            stop_reason = "time_limit"
+            break
+        folder = OUT / f"iteration_{iteration:03d}"
+        folder.mkdir()
+        if best_y is not None:
+            set_choices(best_y)
+        print(f"\nAnnual investment iteration {iteration}; cuts={len(model.benders_cuts)}", flush=True)
+        with Heartbeat("Solving the DHNx investment master"):
+            result = solver.solve(model, tee=False, load_solutions=False,
+                logfile=str(folder / "cbc.log"),
+                options={"ratio": 0.0, "seconds": min(180.0, remaining), "timeMode": "elapsed", "logLevel": 1})
+        term = result.solver.termination_condition
+        log = (folder / "cbc.log").read_text(encoding="utf-8", errors="replace")
+        candidate = (term in {TerminationCondition.optimal, TerminationCondition.maxTimeLimit}
+            and len(result.solution) > 0 and bool(result.solution[0].variable)
+            and "no feasible solution found" not in log.lower() and "no integer solution" not in log.lower())
+        lower = finite_bound(result.problem.lower_bound)
+        found = re.findall(r"^Lower bound:\s+([-+0-9.eE]+)", log, flags=re.MULTILINE)
+        if found:
+            lower = float(found[-1])
+        if candidate:
+            model.solutions.load_from(result)
+            constraint_error = check_constraints()
+            objective = float(value(model.annual_total_cost))
+            if term == TerminationCondition.optimal and "within gap tolerance" not in log.lower():
+                lower = objective
+        else:
+            objective, constraint_error = None, None
+        if lower is not None:
+            global_lower = max(global_lower, lower-0.001)
+        if best_y is not None and global_lower > best_upper+0.1:
+            raise RuntimeError("Lower bound exceeds a validated upper bound; stopped for review.")
+        gap = relative_gap()
+        record = {"iteration": iteration, "master_termination": str(term),
+            "master_objective_EUR": objective, "annual_lower_bound_EUR": global_lower,
+            "best_annual_upper_bound_EUR": best_upper if best_y is not None else None,
+            "annual_relative_gap": gap, "master_max_constraint_error": constraint_error}
+        if best_y is not None and best_upper-global_lower <= max(ABSOLUTE_GAP_EUR, args.gap*abs(best_upper)):
+            stop_reason = "annual_gap_target_met"
+            history.append(record)
+            break
+        if not candidate:
+            stop_reason = "master_no_new_integer_candidate"
+            history.append(record)
+            break
+        y = np.array([int(round(value(var))) for var in y_variables])
+        key = tuple(y)
+        if key in evaluated:
+            # A repeated feasible topology has already supplied its full-year supporting cut.
+            stop_reason = "repeated_candidate_numerical_or_master_limit"
+            history.append(record)
+            break
+        with Heartbeat("Evaluating every exact annual load state and generating cuts"):
+            evaluation = annual_evaluation(y)
+        record["candidate_evaluation"] = evaluation
+        if evaluation["feasible"]:
+            evaluated[key] = evaluation
+            accept_incumbent(y, evaluation)
+        record.update(best_annual_upper_bound_EUR=best_upper if best_y is not None else None,
+            annual_relative_gap=relative_gap(), cut_count=len(model.benders_cuts))
+        history.append(record)
+        save_json(OUT / "iteration_history.json", history)
+        print(f"Annual bounds: LB={global_lower:,.2f}; UB={best_upper:,.2f}; "
+            f"gap={relative_gap():.4%}" if best_y is not None else "No annual feasible incumbent yet.", flush=True)
+    if best_y is None:
+        raise RuntimeError("No full-year feasible design found; see iteration logs. Increase the time or iteration limit.")
+    set_choices(best_y)
+    selected, matrix, bounds, dispatch_lp = fixed_network(opti, pipes)
+    folder = OUT / "final_validation"
+    folder.mkdir()
+    with Heartbeat("Independently validating the best design for all 8760 hours"):
+        flows, failed_hours, validation = validate_year(selected, matrix, bounds, dispatch_lp, folder)
+    if len(failed_hours):
+        raise RuntimeError("The best design failed independent full-year validation.")
+    # Check the eliminated LP against DHNx with the incumbent investments fixed.
+    for j, pipe in enumerate(pipes):
+        pipe["status"].fix(int(best_y[j]))
+    original_cost = model.objective.expr
+    model.annual_total_cost.deactivate()
+    model.benders_cuts.deactivate()
+    model.upper_cutoff.deactivate()
+    model.objective.activate()
+    check = solver.solve(model, tee=False)
+    if check.solver.termination_condition != TerminationCondition.optimal:
+        raise RuntimeError("Fixed-design DHNx equivalence solve failed.")
+    compact_cost = float(selected.annualised_cost_EUR.sum())
+    for load in states.to_numpy():
+        r, _ = dispatch_lp(load)
+        if not r.success:
+            raise RuntimeError("Fixed-design LP and DHNx feasibility disagree.")
+        compact_cost += float(r.fun)*DT
+    if not np.isclose(compact_cost, float(value(original_cost)), atol=0.1, rtol=1e-6):
+        raise RuntimeError("Fixed-design LP and DHNx objective disagree.")
+    save_json(OUT / "iteration_history.json", history)
+    solver_info = {"method": "exact annual Benders using DHNx investment variables and CBC",
+        "stop_reason": stop_reason, "requested_annual_relative_gap": args.gap,
+        "absolute_gap_tolerance_EUR": ABSOLUTE_GAP_EUR,
+        "annual_lower_bound_EUR": global_lower, "annual_upper_bound_EUR": best_upper,
+        "annual_relative_gap": relative_gap(), "elapsed_search_seconds": perf_counter()-search_start,
+        "all_hour_feasibility_verified": True, "DHNx_fixed_design_equivalence_verified": True}
+    progress("Exporting validated annual results")
+    annual_flows = flows[state_ids]
+    count = len(selected)
+    dispatch = pd.DataFrame(annual_flows[:, count:], index=demand.index, columns=producer_ids)
+    loss_kW = float(selected.loss_kW.sum())
+    balance = dispatch.sum(axis=1)-demand.sum(axis=1)-loss_kW
+    if balance.abs().max() > TOL:
+        raise RuntimeError("Full-year aggregate heat balance failed.")
+    operating_cost = float((dispatch.sum()*DT*producers.heat_cost_EUR_kWh).sum())
+    annual_pipe_cost = float(selected.annualised_cost_EUR.sum())
+    if not np.isclose(annual_pipe_cost+operating_cost, best_upper, atol=0.1, rtol=1e-6):
+        raise RuntimeError("Independent annual cost disagrees with the incumbent cost.")
+    heat_demand_kWh = float(demand.sum().sum()*DT)
+    summary = {"step": 2, "country": COUNTRY, "study_region": REGION,
+        "solution_quality": ("annual_optimality_gap_target_met" if stop_reason == "annual_gap_target_met"
+            else "annual_feasible_search_incomplete"),
+        "hours": HOURS, "exact_load_states": len(all_states), "annual_cost_states": len(all_states),
+        "DHNx_master_constraint_hours": len(states),
+        "investment_iterations": len(history), "heat_demand_kWh": heat_demand_kWh,
+        "peak_demand_kW": float(demand.sum(axis=1).max()), "network_loss_kW": loss_kW,
+        "heat_losses_kWh": loss_kW*HOURS*DT, "heat_production_kWh": float(dispatch.sum().sum()*DT),
+        "loss_share_of_demand_percent": loss_kW*HOURS*DT/heat_demand_kWh*100,
+        "installed_routes": int(len(selected)), "installed_length_m": float(selected.length_m.sum()),
+        "initial_pipe_investment_EUR": float(selected.initial_cost_EUR.sum()),
+        "annualised_pipe_cost_EUR": annual_pipe_cost, "operating_cost_EUR": operating_cost,
+        "validated_annual_total_cost_EUR": annual_pipe_cost+operating_cost,
+        "cost_per_delivered_heat_EUR_kWh": (annual_pipe_cost+operating_cost)/heat_demand_kWh,
+        "pipe_type_counts": {str(k): int(v) for k, v in selected.hp_type.value_counts().items()},
+        "max_balance_error_kW": float(balance.abs().max()), "validation": validation,
+        "design_solver": solver_info, "full_year_investment_optimality_gap": relative_gap()}
+    hourly = demand.add_prefix("consumer_").join(dispatch.add_prefix("producer_"))
+    hourly["demand_kW"] = demand.sum(axis=1)
+    hourly["network_loss_kW"] = loss_kW
+    hourly["generation_kW"] = dispatch.sum(axis=1)
+    hourly["balance_error_kW"] = balance
+    hourly["operating_cost_EUR"] = (dispatch*producers.heat_cost_EUR_kWh).sum(axis=1)*DT
+    hourly.to_csv(OUT / "hourly_results.csv")
+    output_flows = pd.DataFrame(annual_flows[:, :count], index=demand.index,
+        columns=[f"pipe_{i}_output_kW" for i in selected.pipe_id])
+    output_flows.to_csv(OUT / "hourly_pipe_output_flows.csv")
+    input_flows = output_flows.copy()
+    input_flows += selected.loss_kW.to_numpy()
+    input_flows.columns = [f"pipe_{i}_input_kW" for i in selected.pipe_id]
+    input_flows.to_csv(OUT / "hourly_pipe_input_flows.csv")
+    selected["max_abs_input_kW"] = np.abs(input_flows.to_numpy()).max(axis=0)
+    selected["max_abs_output_kW"] = np.abs(output_flows.to_numpy()).max(axis=0)
+    selected["max_utilisation_percent"] = np.maximum(selected.max_abs_input_kW,
+        selected.max_abs_output_kW)/selected.capacity_kW*100
+    selected["hours_at_capacity"] = ((np.maximum(np.abs(input_flows.to_numpy()), np.abs(output_flows.to_numpy()))
+        >= selected.capacity_kW.to_numpy()*0.999).sum(axis=0))
+    binding = selected[selected.max_utilisation_percent >= 99.9]
+    binding.to_csv(OUT / "binding_pipes.csv", index=False)
+
+    # Producer use.
+    producer_results = producers.copy()
+    producer_results["heat_production_kWh"] = dispatch.sum()*DT
+    producer_results["share_of_generation_percent"] = dispatch.sum()/dispatch.sum().sum()*100
+    producer_results["max_output_kW"] = dispatch.max()
+    producer_results["peak_utilisation_percent"] = dispatch.max()/producers.capacity_kW_heat*100
+    producer_results["capacity_factor_percent"] = dispatch.sum()*DT/(producers.capacity_kW_heat*HOURS*DT)*100
+    producer_results["hours_running"] = (dispatch > 1e-3).sum()
+    producer_results["hours_at_capacity"] = (dispatch >= producers.capacity_kW_heat*0.999).sum()
+    producer_results["operating_cost_EUR"] = dispatch.sum()*DT*producers.heat_cost_EUR_kWh
+
+    # Compare with Step 1.
+    type_summary = (selected.groupby("hp_type").agg(routes=("pipe_id", "count"), length_m=("length_m", "sum"),
+        initial_cost_EUR=("initial_cost_EUR", "sum"), annualised_cost_EUR=("annualised_cost_EUR", "sum"),
+        loss_kW=("loss_kW", "sum")).reindex(pipe_types).fillna(0))
+    type_summary.to_csv(OUT / "pipe_type_summary.csv")
+    step2_values = {"consumers": len(consumer_ids), "producers": n_producers, "pipe_types_available": len(pipe_types),
+        "heat_demand_MWh": heat_demand_kWh/1000, "peak_demand_kW": summary["peak_demand_kW"],
+        "installed_routes": summary["installed_routes"], "installed_length_m": summary["installed_length_m"],
+        "initial_pipe_investment_EUR": summary["initial_pipe_investment_EUR"],
+        "annualised_pipe_cost_EUR": annual_pipe_cost, "operating_cost_EUR": operating_cost,
+        "total_annual_cost_EUR": annual_pipe_cost+operating_cost, "network_loss_kW": loss_kW,
+        "heat_losses_MWh": loss_kW*HOURS*DT/1000,
+        "loss_share_of_demand_percent": summary["loss_share_of_demand_percent"],
+        "cost_per_delivered_heat_EUR_kWh": summary["cost_per_delivered_heat_EUR_kWh"]}
+    baseline_pipes = pd.read_csv(STEP1_RESULTS / "selected_pipes.csv")
+    baseline_consumers = pd.read_csv(STEP1_RESULTS / "consumer_load_mapping.csv")
+    baseline_demand = baseline["heat_demand_kWh"]
+    baseline_total = baseline["validated_annual_total_cost_EUR"]
+    step1_values = {"consumers": len(baseline_consumers), "producers": len(baseline_producers),
+        "pipe_types_available": len(baseline_types), "heat_demand_MWh": baseline_demand/1000,
+        "peak_demand_kW": baseline["peak_demand_kW"], "installed_routes": len(baseline_pipes),
+        "installed_length_m": float(baseline_pipes.length_m.sum()),
+        "initial_pipe_investment_EUR": baseline["initial_pipe_investment_EUR"],
+        "annualised_pipe_cost_EUR": baseline["annualised_pipe_cost_EUR"],
+        "operating_cost_EUR": baseline["operating_cost_EUR"], "total_annual_cost_EUR": baseline_total,
+        "network_loss_kW": baseline["network_loss_kW"], "heat_losses_MWh": baseline["heat_losses_kWh"]/1000,
+        "loss_share_of_demand_percent": baseline["heat_losses_kWh"]/baseline_demand*100,
+        "cost_per_delivered_heat_EUR_kWh": baseline_total/baseline_demand}
+    comparison = pd.DataFrame({"step1": pd.Series(step1_values), "step2": pd.Series(step2_values)})
+    comparison["change"] = comparison.step2-comparison.step1
+    comparison["change_percent"] = comparison.change/comparison.step1.replace(0, np.nan)*100
+    comparison.to_csv(OUT / "comparison_step1_step2.csv")
+    summary["step1_reference_folder"] = str(STEP1_RESULTS)
+    summary["step1_solution_quality"] = baseline.get("solution_quality", "not recorded")
+
+    # Match old and new routes by endpoints.
+    def route_key(row):
+        return tuple(sorted([row.from_node, row.to_node]))
+    old_selected = {route_key(row): row for row in baseline_pipes.itertuples()}
+    new_selected = {route_key(row): row for row in selected.itertuples()}
+    topology_rows = []
+    for key in sorted(set(old_selected) | set(new_selected)):
+        old, new = old_selected.get(key), new_selected.get(key)
+        change = ("added" if old is None else "removed" if new is None else
+            "pipe_type_changed" if old.hp_type != new.hp_type else "retained_same_type")
+        topology_rows.append({"node_a": key[0], "node_b": key[1], "change": change,
+            "step1_pipe_id": old.pipe_id if old else "", "step2_pipe_id": new.pipe_id if new else "",
+            "step1_type": old.hp_type if old else "", "step2_type": new.hp_type if new else "",
+            "step1_length_m": old.length_m if old else 0, "step2_length_m": new.length_m if new else 0})
+    topology = pd.DataFrame(topology_rows)
+    topology.to_csv(OUT / "topology_changes.csv", index=False)
+    old_types = baseline_pipes.groupby("hp_type").agg(routes=("pipe_id", "count"),
+        length_m=("length_m", "sum"), initial_cost_EUR=("initial_cost_EUR", "sum"), loss_kW=("loss_kW", "sum"))
+    type_comparison = old_types.add_prefix("step1_").join(type_summary.add_prefix("step2_"), how="outer").fillna(0)
+    type_comparison.to_csv(OUT / "pipe_type_comparison.csv")
+    selected["annual_heat_loss_kWh"] = selected.loss_kW*HOURS*DT
+    selected["share_of_network_loss_percent"] = selected.loss_kW/loss_kW*100 if loss_kW else 0
+    selected.to_csv(OUT / "selected_pipes.csv", index=False)
+
+    connected_nodes = set(selected.from_node) | set(selected.to_node)
+    producer_results["connected"] = [f"producers-{p}" in connected_nodes for p in producer_ids]
+    producer_results["underused_below_threshold"] = producer_results.capacity_factor_percent < UNDERUSED_PERCENT
+    producer_results.to_csv(OUT / "producer_results.csv")
+
+    quality = ("Annual optimality gap target met" if stop_reason == "annual_gap_target_met"
+        else "Feasible incumbent; optimality search incomplete")
+    save_json(OUT / "summary.json", summary)
+
+    # 6. Plot the selected network and annual producer dispatch
+    nodes = {f"{group}-{i}": (r.lon, r.lat) for group in ["consumers", "producers", "forks"]
+        for i, r in frames[group].iterrows()}
+    palette = ["#4c78a8", "#287957", "#e0a526", "#b96b2c", "#8e3b6f"]
+    colors = {t: palette[i % len(palette)] for i, t in enumerate(pipe_types)}
+    widths = {t: 1.4+0.6*i for i, t in enumerate(pipe_types)}
+    fig, ax = plt.subplots(figsize=(14, 7))
+    for row in frames["pipes"].itertuples():     
+        (x1, y1), (x2, y2) = nodes[row.from_node], nodes[row.to_node]
+        ax.plot([x1, x2], [y1, y2], color="#c9ccd1", linewidth=0.8, linestyle="--", zorder=1)
+    for row in selected.itertuples():
+        (x1, y1), (x2, y2) = nodes[row.from_node], nodes[row.to_node]
+        ax.plot([x1, x2], [y1, y2], color=colors[row.hp_type], linewidth=widths[row.hp_type], zorder=2)
+        if row.length_m > 10:
+            ax.text((x1+x2)/2, (y1+y2)/2, row.hp_type, fontsize=7, ha="center",
+                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.85, "pad": 1})
+    for group, prefix, marker, color in [("consumers", "C", "o", "#287957"),
+            ("producers", "P", "s", "#966026"), ("forks", "J", "o", "#525866")]:
+        frame = frames[group]
+        ax.scatter(frame.lon, frame.lat, c=color, marker=marker, s=60, label=group, zorder=3)
+        for i, row in frame.iterrows():
+            offset = (-13 if row.lat >= 0 else 8) if group == "forks" else (11 if row.lat >= 0 else -16)
+            ax.annotate(f"{prefix}{int(i)+1}", (row.lon, row.lat), xytext=(0, offset),
+                textcoords="offset points", ha="center", fontsize=8)
+    for t in pipe_types:
+        ax.plot([], [], color=colors[t], linewidth=widths[t], label=t)
+    ax.plot([], [], color="#c9ccd1", linestyle="--", label="not built")
+    ax.set(xlabel="Local x (m)", ylabel="Local y (m)", title=f"Step 2 - {quality}")
+    ax.set_aspect("equal", adjustable="box")
+    ax.margins(0.12)
+    ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5))
+    ax.grid(alpha=0.15)
+    fig.tight_layout()
+    fig.savefig(OUT / "optimised_network.png", dpi=180, bbox_inches="tight")
+    if "ipykernel" in sys.modules:
+        plt.show()
+    plt.close(fig)
+    unit_colors = ["#287957", "#b96b2c", "#4c78a8", "#7fb0d9", "#8e3b6f"]
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.stackplot(demand.index, *[dispatch[p] for p in producer_ids],
+        labels=[f"{producers.loc[p, 'label']} {producers.loc[p, 'technology']}" for p in producer_ids],
+        colors=unit_colors[:n_producers])
+    ax.plot(demand.index, demand.sum(axis=1), color="black", linewidth=0.6, label="Heat demand")
+    ax.set(xlabel="Original hourly timestep", ylabel="Heat power (kW)", title="Step 2 validated annual dispatch")
+    ax.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    fig.savefig(OUT / "annual_dispatch.png", dpi=180)
+    if "ipykernel" in sys.modules:
+        plt.show()
+    plt.close(fig)
+    print("\nSelected pipes:\n" + selected.round(4).to_string(index=False))
+    print("\nPipe types:\n" + type_summary.round(2).to_string())
+    print("\nBinding pipes (>= 99.9% utilisation):\n" + (binding[["pipe_id", "from_node", "to_node", "hp_type",
+        "hours_at_capacity"]].to_string(index=False) if len(binding) else "none"))
+    print("\nProducers:\n" + producer_results[["label", "technology", "heat_production_kWh",
+        "share_of_generation_percent", "max_output_kW", "capacity_factor_percent",
+        "hours_at_capacity"]].round(2).to_string())
+    print("\nStep 1 vs Step 2:\n" + comparison.round(3).to_string())
+    print(f"\nResults saved to: {OUT}")
+    save_json(OUT / "solver_status.json", solver_info)
+    print(f"Full-year optimality gap: {relative_gap():.6%}; stop reason: {stop_reason}.")
+    progress("Complete: annual validated results and optimality bounds saved")
+except Exception as error:
+    save_json(OUT / "failure.json", {"error": str(error), "final_results_valid": False})
+    progress("Stopped: see failure.json and round diagnostics")
+    raise
