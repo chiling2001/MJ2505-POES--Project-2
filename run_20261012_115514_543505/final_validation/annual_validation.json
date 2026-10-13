@@ -1,0 +1,8 @@
+{
+  "all_hours_checked": 8760,
+  "exact_states_checked": 8760,
+  "infeasible_state_count": 0,
+  "infeasible_hour_count": 0,
+  "max_node_balance_error_kW": 7.838174553853605e-14,
+  "max_flow_bound_error_kW": 0.0
+}

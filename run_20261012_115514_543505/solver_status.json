@@ -1,0 +1,12 @@
+{
+  "method": "exact annual Benders using DHNx investment variables and CBC",
+  "stop_reason": "time_limit",
+  "requested_annual_relative_gap": 0.01,
+  "absolute_gap_tolerance_EUR": 0.02,
+  "annual_lower_bound_EUR": 226229.946,
+  "annual_upper_bound_EUR": 263112.96760601504,
+  "annual_relative_gap": 0.1401794139665652,
+  "elapsed_search_seconds": 919.8062312080001,
+  "all_hour_feasibility_verified": true,
+  "DHNx_fixed_design_equivalence_verified": true
+}

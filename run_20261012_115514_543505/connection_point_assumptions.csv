@@ -1,0 +1,31 @@
+node,lon_x_m,lat_y_m,retained_from_step1,rationale,source
+consumers-0,50.0,30.0,True,Retained from Step 1,Group schematic layout assumption
+consumers-1,50.0,-30.0,True,Retained from Step 1,Group schematic layout assumption
+consumers-2,100.0,30.0,True,Retained from Step 1,Group schematic layout assumption
+consumers-3,150.0,30.0,True,Retained from Step 1,Group schematic layout assumption
+consumers-4,150.0,-30.0,True,Retained from Step 1,Group schematic layout assumption
+consumers-5,250.0,30.0,False,Eastern extension of the same schematic block layout; 5 m service connections,Group schematic layout assumption
+consumers-6,250.0,-30.0,False,Eastern extension of the same schematic block layout; 5 m service connections,Group schematic layout assumption
+consumers-7,300.0,30.0,False,Eastern extension of the same schematic block layout; 5 m service connections,Group schematic layout assumption
+consumers-8,350.0,30.0,False,Eastern extension of the same schematic block layout; 5 m service connections,Group schematic layout assumption
+consumers-9,350.0,-30.0,False,Eastern extension of the same schematic block layout; 5 m service connections,Group schematic layout assumption
+producers-0,0.0,0.0,True,Retained from Step 1,Group schematic layout assumption
+producers-1,200.0,0.0,True,Retained from Step 1,Group schematic layout assumption
+producers-2,400.0,0.0,False,"Distributed candidate supply points; assumed sites, not optimised locations",Group schematic layout assumption
+producers-3,300.0,60.0,False,"Distributed candidate supply points; assumed sites, not optimised locations",Group schematic layout assumption
+producers-4,100.0,-60.0,False,"Distributed candidate supply points; assumed sites, not optimised locations",Group schematic layout assumption
+forks-0,50.0,0.0,True,Retained from Step 1,Group schematic layout assumption
+forks-1,150.0,0.0,True,Retained from Step 1,Group schematic layout assumption
+forks-2,50.0,25.0,True,Retained from Step 1,Group schematic layout assumption
+forks-3,50.0,-25.0,True,Retained from Step 1,Group schematic layout assumption
+forks-4,100.0,25.0,True,Retained from Step 1,Group schematic layout assumption
+forks-5,150.0,25.0,True,Retained from Step 1,Group schematic layout assumption
+forks-6,150.0,-25.0,True,Retained from Step 1,Group schematic layout assumption
+forks-7,250.0,0.0,False,Junctions provide alternative trunk/branch routes; they have zero heat demand,Group schematic layout assumption
+forks-8,300.0,0.0,False,Junctions provide alternative trunk/branch routes; they have zero heat demand,Group schematic layout assumption
+forks-9,350.0,0.0,False,Junctions provide alternative trunk/branch routes; they have zero heat demand,Group schematic layout assumption
+forks-10,250.0,25.0,False,Junctions provide alternative trunk/branch routes; they have zero heat demand,Group schematic layout assumption
+forks-11,250.0,-25.0,False,Junctions provide alternative trunk/branch routes; they have zero heat demand,Group schematic layout assumption
+forks-12,300.0,25.0,False,Junctions provide alternative trunk/branch routes; they have zero heat demand,Group schematic layout assumption
+forks-13,350.0,25.0,False,Junctions provide alternative trunk/branch routes; they have zero heat demand,Group schematic layout assumption
+forks-14,350.0,-25.0,False,Junctions provide alternative trunk/branch routes; they have zero heat demand,Group schematic layout assumption

@@ -1,0 +1,2 @@
+ExperimentalFeatureWarning: Setting `minimum` to negative values allows for the flow to become bidirectional, which is an experimental feature.
+FutureWarning: For backward compatibility, the option min overwrites the option minimum. Both options cannot be set at the same time.
