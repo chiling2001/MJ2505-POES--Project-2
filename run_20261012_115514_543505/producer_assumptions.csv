@@ -1,6 +1,0 @@
-producer_id,label,technology,capacity_kW_heat,heat_cost_EUR_kWh
-0,P1,Non-condensing wood-chip boiler,400.0,0.042325842696629215
-1,P2,Non-condensing natural-gas boiler,400.0,0.05576344086021505
-2,P3,Waste heat heat pump,300.0,0.029682903225806453
-3,P4,Air source heat pump,300.0,0.03086
-4,P5,Electric boiler,300.0,0.08428333333333334

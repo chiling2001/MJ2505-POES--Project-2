@@ -1,2 +1,0 @@
-pipe_id,from_node,to_node,hp_type,length_m,capacity_kW,loss_kW,output_lower_kW,output_upper_kW,initial_cost_EUR,annualised_cost_EUR,max_abs_input_kW,max_abs_output_kW,max_utilisation_percent,hours_at_capacity
-0,producers-0,forks-0,DN-60,50.0,335.0,0.5499999999999999,-335.0,334.45,31000.0,2016.5944874885736,335.0,334.45,100.0,929

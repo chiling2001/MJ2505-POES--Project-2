@@ -1,6 +1,0 @@
-producer_id,label,technology,capacity_kW_heat,heat_cost_EUR_kWh,heat_production_kWh,share_of_generation_percent,max_output_kW,peak_utilisation_percent,capacity_factor_percent,hours_running,hours_at_capacity,operating_cost_EUR,connected,underused_below_threshold
-0,P1,Non-condensing wood-chip boiler,400.0,0.042325842696629215,1570423.6963307252,22.734133495982924,400.0,100.0,44.818027863319784,7805,270,66469.50633795328,True,False
-1,P2,Non-condensing natural-gas boiler,400.0,0.05576344086021505,109019.4971389171,1.5782134511928014,362.92682041600006,90.73170510400001,3.1112870188047115,1189,0,6079.302281316387,True,True
-2,P3,Waste heat heat pump,300.0,0.029682903225806453,2628000.0,38.04406604856846,300.0,100.0,100.0,8760,8760,78006.66967741936,True,False
-3,P4,Air source heat pump,300.0,0.03086,2600335.7927328274,37.64358700425582,300.0,100.0,98.94732849059464,8760,7813,80246.36256373505,True,False
-4,P5,Electric boiler,300.0,0.08428333333333334,0.0,0.0,0.0,0.0,0.0,0,0,0.0,False,True
