@@ -1,0 +1,148 @@
+# ══════════════════════════════════════════════════════════════════
+# Step 4 — Integration of DHNx distribution losses with oemof.solph
+# ══════════════════════════════════════════════════════════════════
+import json
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import oemof.solph as solph
+from oemof.solph import processing
+
+OUTPUT_DIR_S4 = PROJECT_DIR / "Step4_results"
+OUTPUT_DIR_S4.mkdir(parents=True, exist_ok=True)
+
+# ── 1. 讀取 Step 2 的熱網分配損失 (Q_losses) ────────────────────────
+# 自動尋找 Step 2 結果資料夾中的 summary.json，若無則可手動輸入
+step2_Summaries = list(PROJECT_DIR.glob("**/Step2*_results/run_*/summary.json"))
+
+if step2_Summaries:
+    latest_summary = max(step2_Summaries, key=lambda p: p.stat().st_mtime)
+    s2_data = json.loads(latest_summary.read_text(encoding="utf-8"))
+    loss_kW = float(s2_data["network_loss_kW"])
+    print(f"成功從 {latest_summary.parent.name} 讀取 Step 2 熱損失:")
+else:
+    # ⚠️ 若程式找不到 Step 2 結果檔，請在此處手動將 None 替換為 Step 2 算出的 network_loss_kW 數值
+    loss_kW = None 
+    if loss_kW is None:
+        raise FileNotFoundError(
+            "找不到 Step 2 的 summary.json！請放入檔案，或在上方手動設定 loss_kW = 您的數值 (kW)"
+        )
+
+loss_MW = loss_kW / 1000.0  # 單位轉換：kW -> MW (配合 Step 3 的 MWh/h 單位)
+annual_loss_MWh = loss_MW * 8760
+
+print(f"  每小時固定熱損失 (Q_losses): {loss_kW:.4f} kW ({loss_MW:.6f} MW)")
+print(f"  全年總熱網損失:             {annual_loss_MWh:.2f} MWh")
+
+# ── 2. 建立調整後的新總負載曲線 (Q_totdl = Q_demand + Q_losses) ─────
+df_s4_const = df.copy()
+df_s4_const["consumer_demand_MW"] = df["heat_demand"]
+df_s4_const["network_loss_MW"]    = loss_MW
+df_s4_const["heat_demand"]        = df["heat_demand"] + loss_MW  # 替換為總負載
+
+df_s4_dk2 = df_h.copy()
+df_s4_dk2["consumer_demand_MW"] = df_h["heat_demand"]
+df_s4_dk2["network_loss_MW"]    = loss_MW
+df_s4_dk2["heat_demand"]        = df_h["heat_demand"] + loss_MW
+
+df_s4_const.to_csv(OUTPUT_DIR_S4 / "step4_adjusted_demand_input.csv")
+
+print(f"\n調整後負載統計 (Q_totdl):")
+print(f"  Step 3 原本全年總需求: {df['heat_demand'].sum():,.2f} MWh | 尖峰: {df['heat_demand'].max():.4f} MW")
+print(f"  Step 4 調整後全年總負載: {df_s4_const['heat_demand'].sum():,.2f} MWh | 尖峰: {df_s4_const['heat_demand'].max():.4f} MW")
+print(f"  系統最大總裝置容量上限: {(P1_CAP+P2_CAP+P3_CAP+P4_CAP+P5_CAP)/1000.0:.4f} MW")
+
+# ── 3. 定義通用模擬與分析函數 (確保與 Step 3 參數完全一致) ──────────
+def run_step4_scenario(df_input, tag, s3_dispatch, s3_caps, s3_opex, s3_lcoh):
+    # 呼叫 Step 3 已定義好的模型建構器 build_es_h
+    es_s4, b_heat_s4 = build_es_h(df_input, tag=tag)
+    model_s4 = solph.Model(es_s4)
+    model_s4.solve(solver="cbc", solve_kwargs={"tee": False}, cmdline_options={"ratioGap": "0.02"})
+    res_s4 = processing.results(model_s4)
+    
+    N = len(df_input)
+    dispatch_s4 = pd.DataFrame(index=df_input.index)
+    caps_s4 = {}
+    
+    for u in units:
+        label = f"{u}{tag}"
+        seq = res_s4[(es_s4.groups[label], b_heat_s4)]["sequences"]["flow"].values
+        dispatch_s4[u] = seq[:N]
+        caps_s4[u] = res_s4[(es_s4.groups[label], b_heat_s4)]["scalars"].get("invest", 0.0)
+        
+    dispatch_s4["demand"] = df_input["heat_demand"].values
+    dispatch_s4["consumer_demand"] = df_input["consumer_demand_MW"].values
+    dispatch_s4["network_loss"] = df_input["network_loss_MW"].values
+    
+    # 計算燃料與營運成本 (OPEX)
+    fuel_cost_series = {
+        "wood_chip_boiler": (1/ETA_WCB)  * df_input["biomass_price"],
+        "gas_boiler":       (1/ETA_GB)   * df_input["gas_price"],
+        "waste_heat_hp":    (1/COP_WH)   * df_input["electricity_price"],
+        "air_source_hp":    (1/COP_ASHP) * df_input["electricity_price"],
+        "electric_boiler":  (1/ETA_EB)   * df_input["electricity_price"],
+    }
+    
+    opex_s4 = sum((dispatch_s4[u] * fuel_cost_series[u]).sum() + dispatch_s4[u].sum() * var_cost[u] for u in units)
+    raw_capex_s4 = sum(caps_s4[u] * spec_inv[u] for u in units)
+    
+    total_generated_MWh = dispatch_s4[units].sum().sum()
+    delivered_heat_MWh  = df_input["consumer_demand_MW"].sum()
+    
+    # 計算兩種 LCOH：以總發熱量為分母 vs 以實際送達消費者熱量為分母
+    lcoh_gen = LCOH(raw_capex_s4, opex_s4, total_generated_MWh, i=INTEREST_RATE, n=LIFE_YEARS)
+    lcoh_del = LCOH(raw_capex_s4, opex_s4, delivered_heat_MWh, i=INTEREST_RATE, n=LIFE_YEARS)
+    
+    # 各機組比較表
+    s3_gen = s3_dispatch[units].sum()
+    s4_gen = dispatch_s4[units].sum()
+    
+    unit_cmp = pd.DataFrame({
+        "S3_Cap_MW": pd.Series(s3_caps),
+        "S4_Cap_MW": pd.Series(caps_s4),
+        "Cap_Diff_MW": pd.Series(caps_s4) - pd.Series(s3_caps),
+        "S3_Gen_MWh": s3_gen,
+        "S4_Gen_MWh": s4_gen,
+        "Gen_Diff_MWh": s4_gen - s3_gen,
+        "S3_Share_%": s3_gen / s3_gen.sum() * 100,
+        "S4_Share_%": s4_gen / s4_gen.sum() * 100,
+        "Share_Diff_pp": (s4_gen / s4_gen.sum() * 100) - (s3_gen / s3_gen.sum() * 100),
+        "S4_Hours_at_Max_Cap": [(dispatch_s4[u] >= caps_s4[u]*0.999).sum() if caps_s4[u]>0 else 0 for u in units]
+    })
+    
+    sys_summary = {
+        "Total_Gen_S3_MWh": s3_gen.sum(),
+        "Total_Gen_S4_MWh": s4_gen.sum(),
+        "OPEX_S3_EUR": s3_opex,
+        "OPEX_S4_EUR": opex_s4,
+        "OPEX_Diff_%": (opex_s4 - s3_opex) / s3_opex * 100,
+        "LCOH_S3_EUR_MWh": s3_lcoh,
+        "LCOH_S4_Generated_EUR_MWh": lcoh_gen,
+        "LCOH_S4_Delivered_EUR_MWh": lcoh_del,
+        "Network_Efficiency_%": delivered_heat_MWh / total_generated_MWh * 100
+    }
+    
+    return dispatch_s4, caps_s4, unit_cmp, sys_summary
+
+# ── 4. 執行模擬 (Primary 固定電價 & DK2 動態電價) ──────────────────
+print("\n執行模擬中...")
+disp_s4_pri, caps_s4_pri, cmp_pri, sys_pri = run_step4_scenario(
+    df_s4_const, "_s4_pri", heat_out, capacities, op_cost, lcoh
+)
+disp_s4_dk2, caps_s4_dk2, cmp_dk2, sys_dk2 = run_step4_scenario(
+    df_s4_dk2, "_s4_dk2", heat_out_h, caps_h, op_h, lcoh_h
+)
+
+# 儲存結果供 Step 5 使用
+disp_s4_pri.to_csv(OUTPUT_DIR_S4 / "step4_dispatch_primary.csv")
+disp_s4_dk2.to_csv(OUTPUT_DIR_S4 / "step4_dispatch_DK2.csv")
+cmp_pri.to_csv(OUTPUT_DIR_S4 / "step4_comparison_primary.csv")
+cmp_dk2.to_csv(OUTPUT_DIR_S4 / "step4_comparison_DK2.csv")
+
+print("\n=== [情境 1：Primary (固定電價 82.5 €/MWh)] Step 3 vs Step 4 機組比較 ===")
+print(cmp_pri.round(2).to_string())
+print("\n系統總覽 (Primary):", json.dumps({k: round(v, 2) for k, v in sys_pri.items()}, indent=2))
+
+print("\n=== [情境 2：DK2 (2024 動態現貨電價)] Step 3 vs Step 4 機組比較 ===")
+print(cmp_dk2.round(2).to_string())
+print("\n系統總覽 (DK2):", json.dumps({k: round(v, 2) for k, v in sys_dk2.items()}, indent=2))
