@@ -1,0 +1,141 @@
+# ══════════════════════════════════════════════════════════════════
+# Step 5 — Environmental Optimization (Adding CO2 Emission Costs)
+# ══════════════════════════════════════════════════════════════════
+import json
+import pandas as pd
+import numpy as np
+import oemof.solph as solph
+from oemof.solph import processing, EnergySystem, Bus, Flow, Investment
+from oemof.solph.components import Source, Sink, Converter
+
+OUTPUT_DIR_S5 = PROJECT_DIR / "Step5_results"
+OUTPUT_DIR_S5.mkdir(parents=True, exist_ok=True)
+
+# ── 1. Environmental Parameters ───────────────────────────────────────────
+CO2_PRC = 90.0  # Carbon Price (€/ton)
+
+# Emission Factors (ton/MWh)
+EF_WOOD = 0.000 
+EF_GAS  = 0.202 
+EF_ELEC = 0.082 
+
+print(f"Carbon Price: {CO2_PRC} EUR/ton")
+print(f"Emission Factors (t/MWh) -> Wood: {EF_WOOD}, Gas: {EF_GAS}, Elec: {EF_ELEC}")
+
+# ── 2. Step 5 Model Builder (Scenario A & B) ──────────────────────────────
+def build_es_s5(df_in, tag, scenario="A"):
+    es = EnergySystem(timeindex=df_in.index, infer_last_interval=True)
+    
+    b_heat = Bus(label=f"heat_bus{tag}")
+    b_elec = Bus(label=f"elec_bus{tag}")
+    b_bio  = Bus(label=f"biomass_bus{tag}")
+    b_gas  = Bus(label=f"gas_bus{tag}")
+    b_wst  = Bus(label=f"waste_heat_bus{tag}")
+    
+    es.add(b_heat, b_elec, b_bio, b_gas, b_wst)
+    
+    if scenario == "A":
+        c_bio  = df_in["biomass_price"]     + (EF_WOOD * CO2_PRC)
+        c_gas  = df_in["gas_price"]         + (EF_GAS  * CO2_PRC)
+        c_elec = df_in["electricity_price"] + (EF_ELEC * CO2_PRC)
+        v_wcb, v_gb, v_wh, v_ashp, v_eb = VOM_WCB, VOM_GB, VOM_WH, VOM_ASHP, VOM_EB
+    elif scenario == "B":
+        c_bio  = pd.Series(EF_WOOD * CO2_PRC, index=df_in.index)
+        c_gas  = pd.Series(EF_GAS  * CO2_PRC, index=df_in.index)
+        c_elec = pd.Series(EF_ELEC * CO2_PRC, index=df_in.index)
+        v_wcb = v_gb = v_wh = v_ashp = v_eb = 0.0
+    else:
+        raise ValueError("Scenario must be 'A' or 'B'.")
+
+    es.add(Source(label=f"electricity_grid{tag}", outputs={b_elec: Flow(variable_costs=c_elec)}))
+    es.add(Source(label=f"biomass_fuel{tag}", outputs={b_bio: Flow(variable_costs=c_bio)}))
+    es.add(Source(label=f"gas_fuel{tag}", outputs={b_gas: Flow(variable_costs=c_gas)}))
+    es.add(Source(label=f"waste_heat_source{tag}", outputs={b_wst: Flow(variable_costs=0.0)}))
+    
+    es.add(Sink(label=f"heat_demand{tag}",
+        inputs={b_heat: Flow(
+            nominal_value=df_in["heat_demand"].max(),
+            fix=(df_in["heat_demand"] / df_in["heat_demand"].max()).values)}))
+            
+    es.add(Converter(label=f"wood_chip_boiler{tag}",
+        inputs={b_bio: Flow()},
+        outputs={b_heat: Flow(nominal_value=Investment(ep_costs=epc_30(CAPEX_WCB), maximum=MAX_WCB), variable_costs=v_wcb)},
+        conversion_factors={b_bio: ETA_WCB}))
+        
+    es.add(Converter(label=f"gas_boiler{tag}",
+        inputs={b_gas: Flow()},
+        outputs={b_heat: Flow(nominal_value=Investment(ep_costs=epc_30(CAPEX_GB), maximum=MAX_GB), variable_costs=v_gb)},
+        conversion_factors={b_gas: ETA_GB}))
+        
+    es.add(Converter(label=f"waste_heat_hp{tag}",
+        inputs={b_wst: Flow(), b_elec: Flow()},
+        outputs={b_heat: Flow(nominal_value=Investment(ep_costs=epc_30(CAPEX_WH), maximum=MAX_WH), variable_costs=v_wh)},
+        conversion_factors={b_wst: (COP_WH-1)/COP_WH, b_elec: 1/COP_WH}))
+        
+    es.add(Converter(label=f"air_source_hp{tag}",
+        inputs={b_elec: Flow()},
+        outputs={b_heat: Flow(nominal_value=Investment(ep_costs=epc_30(CAPEX_ASHP), maximum=MAX_ASHP), variable_costs=v_ashp)},
+        conversion_factors={b_elec: 1/COP_ASHP}))
+        
+    es.add(Converter(label=f"electric_boiler{tag}",
+        inputs={b_elec: Flow()},
+        outputs={b_heat: Flow(nominal_value=Investment(ep_costs=epc_30(CAPEX_EB), maximum=MAX_EB), variable_costs=v_eb)},
+        conversion_factors={b_elec: ETA_EB}))
+        
+    return es, b_heat
+
+# ── 3. Execution and Analysis Function ────────────────────────────────────────
+def run_step5_scenario(df_input, scenario, tag):
+    es_s5, b_heat_s5 = build_es_s5(df_input, tag, scenario=scenario)
+    model_s5 = solph.Model(es_s5)
+    model_s5.solve(solver="cbc", solve_kwargs={"tee": False}, cmdline_options={"ratioGap": "0.02"})
+    res_s5 = processing.results(model_s5)
+    
+    N = len(df_input)
+    dispatch_s5 = pd.DataFrame(index=df_input.index)
+    
+    for u in units:
+        label = f"{u}{tag}"
+        seq = res_s5[(es_s5.groups[label], b_heat_s5)]["sequences"]["flow"].values
+        dispatch_s5[u] = seq[:N]
+    
+    emissions = pd.Series(0.0, index=units)
+    emissions["wood_chip_boiler"] = (dispatch_s5["wood_chip_boiler"].sum() / ETA_WCB) * EF_WOOD
+    emissions["gas_boiler"]       = (dispatch_s5["gas_boiler"].sum() / ETA_GB) * EF_GAS
+    emissions["waste_heat_hp"]    = (dispatch_s5["waste_heat_hp"].sum() / COP_WH) * EF_ELEC
+    emissions["air_source_hp"]    = (dispatch_s5["air_source_hp"].sum() / COP_ASHP) * EF_ELEC
+    emissions["electric_boiler"]  = (dispatch_s5["electric_boiler"].sum() / ETA_EB) * EF_ELEC
+    
+    total_emissions = emissions.sum()
+    gen_s5 = dispatch_s5[units].sum()
+    shares_s5 = gen_s5 / gen_s5.sum() * 100
+    
+    return dispatch_s5, shares_s5, total_emissions
+
+# ── 4. Run Step 5 Scenarios ───────────────────────────────────────────────────
+print("\nExecuting Step 5 Scenarios...")
+disp_s5A, shares_s5A, em_s5A = run_step5_scenario(df_s4_dk2, scenario="A", tag="_s5A")
+disp_s5B, shares_s5B, em_s5B = run_step5_scenario(df_s4_dk2, scenario="B", tag="_s5B")
+
+disp_s5A.to_csv(OUTPUT_DIR_S5 / "step5_scenarioA_dispatch.csv")
+disp_s5B.to_csv(OUTPUT_DIR_S5 / "step5_scenarioB_dispatch.csv")
+
+# ── 5. Comparison Output ────────────────────────────────────────────────────
+try:
+    s4_shares = cmp_dk2["S4_Share_%"]
+except NameError:
+    s4_shares = pd.Series(0, index=units)
+
+cmp_s5 = pd.DataFrame({
+    "Step 4 (No CO2 Cost) %": s4_shares,
+    "Step 5A (Cost+CO2) %": shares_s5A,
+    "Step 5B (Only CO2) %": shares_s5B
+})
+
+print("\n=== Generation Mix Comparison (%) ===")
+print(cmp_s5.round(2).to_string())
+
+print("\n=== Total CO2 Emissions (Tons per year) ===")
+print(f"  Step 5A (Economic + Environmental): {em_s5A:,.2f} Tons")
+print(f"  Step 5B (Strictly Environmental):   {em_s5B:,.2f} Tons")
+print(f"  Emission Reduction in Scenario B:   {(em_s5A - em_s5B):,.2f} Tons")
